@@ -1,50 +1,45 @@
-; =============================================================
-;  noname — терминал на чистом ассемблере (x86-64 Linux, без libc)
-;  Название — заглушка. Меняется в одном месте: NAME в Makefile.
-; =============================================================
-
 default rel
 %include "syscalls.inc"
 
-%ifndef APP_NAME
-  %define APP_NAME "noname"
-%endif
-
 %define BUF_SIZE   4096
 
-extern pty_open, pty_spawn
-extern term_raw, term_restore, term_copy_winsize
-extern write_all, find_shell
+extern pty_open
+extern pty_spawn
+extern term_raw
+extern term_restore
+extern term_copy_winsize
+extern write_all
+extern find_shell
+extern win_init
+extern win_update
+extern wl_read
+extern wl_fd
+extern close_requested
 
 section .rodata
-banner:      db 27, "[1;32m", APP_NAME, 27, "[0m v0.0.2", 10
-banner_len   equ $ - banner
-
-bye:         db 27, "[1;32m", APP_NAME, 27, "[0m: shell exited", 10
-bye_len      equ $ - bye
-
-err_start:   db APP_NAME, ": failed to start shell", 10
-err_start_len equ $ - err_start
+bye:            db 27, "[1;32m", APP_NAME, 27, "[0m: shell exited", 10
+bye_len         equ $ - bye
+err_start:      db APP_NAME, ": failed to start shell", 10
+err_start_len   equ $ - err_start
+err_window:     db APP_NAME, ": failed to open window", 10
+err_window_len  equ $ - err_window
 
 section .bss
-buf:         resb BUF_SIZE
-pfds:        resb 16                    ; 2 x struct pollfd
-status:      resd 1
+buf:            resb BUF_SIZE
+pfds:           resb 24
+status:         resd 1
 
 section .text
 global _start
 
-; Регистры на всё время работы:
-;   rbx = master fd, r12 = slave fd, r13 = pid шелла
-;   r14 = путь к шеллу, r15 = envp
 _start:
-    mov     rax, [rsp]                  ; argc
-    lea     r15, [rsp + rax*8 + 16]     ; envp
+    mov     rax, [rsp]
+    lea     r15, [rsp + rax*8 + 16]
 
-    mov     edi, STDOUT
-    lea     rsi, [banner]
-    mov     edx, banner_len
-    call    write_all
+    mov     rdi, r15
+    call    win_init
+    test    rax, rax
+    js      .fail_window
 
     mov     rdi, r15
     call    find_shell
@@ -68,22 +63,27 @@ _start:
     js      .fail
     mov     r13, rax
 
-    mov     eax, SYS_CLOSE              ; slave родителю не нужен
+    mov     eax, SYS_CLOSE
     mov     rdi, r12
     syscall
 
     call    term_raw
 
-; --- главный цикл: stdin -> pty, pty -> stdout ---
 .loop:
+    cmp     byte [close_requested], 0
+    jne     .closed
+
     mov     dword [pfds], STDIN
-    mov     dword [pfds + 4], POLLIN    ; events = POLLIN, revents = 0
+    mov     dword [pfds + 4], POLLIN
     mov     dword [pfds + 8], ebx
     mov     dword [pfds + 12], POLLIN
+    mov     eax, [wl_fd]
+    mov     [pfds + 16], eax
+    mov     dword [pfds + 20], POLLIN
 
     mov     eax, SYS_POLL
     lea     rdi, [pfds]
-    mov     esi, 2
+    mov     esi, 3
     mov     edx, -1
     syscall
     cmp     rax, -EINTR
@@ -91,6 +91,7 @@ _start:
     test    rax, rax
     js      .done
 
+.pty:
     test    word [pfds + 14], POLLIN | POLLHUP | POLLERR
     jz      .stdin
     mov     eax, SYS_READ
@@ -99,7 +100,7 @@ _start:
     mov     edx, BUF_SIZE
     syscall
     test    rax, rax
-    jle     .done                       ; шелл завершился (EIO)
+    jle     .done
     mov     edi, STDOUT
     lea     rsi, [buf]
     mov     rdx, rax
@@ -107,7 +108,7 @@ _start:
 
 .stdin:
     test    word [pfds + 6], POLLIN | POLLHUP | POLLERR
-    jz      .loop
+    jz      .wl
     mov     eax, SYS_READ
     mov     edi, STDIN
     lea     rsi, [buf]
@@ -119,11 +120,18 @@ _start:
     lea     rsi, [buf]
     mov     rdx, rax
     call    write_all
+
+.wl:
+    test    word [pfds + 22], POLLIN | POLLHUP | POLLERR
+    jz      .loop
+    call    wl_read
+    test    rax, rax
+    jle     .closed
+    call    win_update
     jmp     .loop
 
 .done:
     call    term_restore
-
     mov     eax, SYS_WAIT4
     mov     rdi, r13
     lea     rsi, [status]
@@ -136,8 +144,23 @@ _start:
     mov     edx, bye_len
     call    write_all
 
-    movzx   edi, byte [status + 1]      ; код выхода шелла
+    movzx   edi, byte [status + 1]
     mov     eax, SYS_EXIT
+    syscall
+
+.closed:
+    call    term_restore
+    mov     eax, SYS_EXIT
+    xor     edi, edi
+    syscall
+
+.fail_window:
+    mov     edi, STDERR
+    lea     rsi, [err_window]
+    mov     edx, err_window_len
+    call    write_all
+    mov     eax, SYS_EXIT
+    mov     edi, 1
     syscall
 
 .fail:
