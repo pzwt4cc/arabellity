@@ -8,6 +8,7 @@ global win_redraw
 global on_event
 global close_requested
 global win_pty_fd
+global update_pty_winsize
 
 extern wl_connect
 extern wl_new_id
@@ -148,6 +149,20 @@ win_init:
     WL_END
 
     call    wl_flush
+
+.wait_configure:
+    cmp     byte [configure_pending], 0
+    jne     .configured
+    cmp     byte [close_requested], 0
+    jne     .fail
+    call    wl_read
+    test    rax, rax
+    jle     .fail
+    jmp     .wait_configure
+
+.configured:
+    call    win_update
+
     mov     rax, rbx
 .ret:
     pop     r12
@@ -449,8 +464,8 @@ on_event:
 .seat:
     cmp     esi, WL_SEAT_CAPABILITIES
     jne     .ret
-    mov     eax, [rdx]
-    test    eax, WL_SEAT_CAP_KEYBOARD
+    mov     r10d, [rdx]
+    test    r10d, WL_SEAT_CAP_KEYBOARD
     jz      .check_ptr
     cmp     dword [id_keyboard], 0
     jne     .check_ptr
@@ -460,17 +475,17 @@ on_event:
     WL_U32  [id_keyboard]
     WL_END
 .check_ptr:
-    mov     eax, [rdx]
-    test    eax, WL_SEAT_CAP_POINTER
-    jz      .ret
+    test    r10d, WL_SEAT_CAP_POINTER
+    jz      .flush_seat
     cmp     dword [id_pointer], 0
-    jne     .ret
+    jne     .flush_seat
     call    wl_new_id
     mov     [id_pointer], eax
     WL_BEGIN [id_seat], WL_SEAT_GET_POINTER
     WL_U32  [id_pointer]
     WL_END
-    ret
+.flush_seat:
+    jmp     wl_flush
 
 .keyboard:
     cmp     esi, WL_KEYBOARD_KEY

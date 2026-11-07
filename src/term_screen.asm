@@ -26,7 +26,7 @@ extern win_pty_fd
 %define MAX_ROWS       128
 %define CELL_SIZE      16
 
-%define COLOR_BG       0x0d1117
+%define COLOR_BG       0x000000
 %define COLOR_FG       0xc9d1d9
 %define COLOR_CURSOR   0x39ff14
 %define COLOR_SEL_BG   0x264f78
