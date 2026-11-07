@@ -12,9 +12,12 @@ extern write_all
 extern find_shell
 extern win_init
 extern win_update
+extern win_redraw
 extern wl_read
 extern wl_fd
 extern close_requested
+extern win_pty_fd
+extern term_feed
 
 section .rodata
 bye:            db 27, "[1;32m", APP_NAME, 27, "[0m: shell exited", 10
@@ -50,6 +53,7 @@ _start:
     js      .fail
     mov     rbx, rax
     mov     r12, rdx
+    mov     [win_pty_fd], ebx
 
     mov     rdi, rbx
     call    term_copy_winsize
@@ -101,10 +105,18 @@ _start:
     syscall
     test    rax, rax
     jle     .done
+
+    push    rax
     mov     edi, STDOUT
     lea     rsi, [buf]
     mov     rdx, rax
     call    write_all
+    pop     rax
+
+    lea     rdi, [buf]
+    mov     rsi, rax
+    call    term_feed
+    call    win_redraw
 
 .stdin:
     test    word [pfds + 6], POLLIN | POLLHUP | POLLERR

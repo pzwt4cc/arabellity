@@ -22,6 +22,17 @@
 %define WL_SURFACE_DAMAGE               2
 %define WL_SURFACE_COMMIT               6
 
+%define WL_SEAT_GET_KEYBOARD            1
+%define WL_SEAT_CAPABILITIES            0
+%define WL_SEAT_CAP_KEYBOARD            2
+
+%define WL_KEYBOARD_KEYMAP              0
+%define WL_KEYBOARD_ENTER               1
+%define WL_KEYBOARD_LEAVE               2
+%define WL_KEYBOARD_KEY                 3
+%define WL_KEYBOARD_MODIFIERS           4
+%define WL_KEYBOARD_REPEAT_INFO         5
+
 %define XDG_WM_BASE_GET_XDG_SURFACE     2
 %define XDG_WM_BASE_PONG                3
 %define XDG_WM_BASE_PING                0

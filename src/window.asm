@@ -4,8 +4,10 @@ default rel
 
 global win_init
 global win_update
+global win_redraw
 global on_event
 global close_requested
+global win_pty_fd
 
 extern wl_connect
 extern wl_new_id
@@ -18,19 +20,28 @@ extern wl_flush_fd
 extern wl_read
 extern streq
 extern write_all
+extern term_init
+extern term_resize
+extern term_render
+extern term_cols
+extern term_rows
+extern kbd_handle_key
+extern kbd_handle_modifiers
+extern kbd_input_buf
+extern kbd_input_len
 
 %define DEFAULT_W       800
 %define DEFAULT_H       500
-%define BG_COLOR        0x0d1117
-%define CURSOR_COLOR    0x39ff14
-%define PAD             8
-%define CELL_W          8
-%define CELL_H          16
+%define PAD_X           8
+%define PAD_Y           8
+%define FONT_W          10
+%define FONT_H          20
 
 section .rodata
 s_compositor:   db "wl_compositor", 0
 s_shm:          db "wl_shm", 0
 s_wm_base:      db "xdg_wm_base", 0
+s_seat:         db "wl_seat", 0
 s_title:        db APP_NAME, 0
 err_wl:         db APP_NAME, ": wayland: "
 err_wl_len      equ $ - err_wl
@@ -39,6 +50,7 @@ nl:             db 10
 section .data
 win_w:          dd DEFAULT_W
 win_h:          dd DEFAULT_H
+win_pty_fd:     dd -1
 
 section .bss
 id_registry:        resd 1
@@ -46,6 +58,8 @@ id_callback:        resd 1
 id_compositor:      resd 1
 id_shm:             resd 1
 id_wm_base:         resd 1
+id_seat:            resd 1
+id_keyboard:        resd 1
 id_surface:         resd 1
 id_xdg_surface:     resd 1
 id_toplevel:        resd 1
@@ -58,11 +72,17 @@ buf_size:           resq 1
 sync_done:          resb 1
 configure_pending:  resb 1
 close_requested:    resb 1
+winsize_struct:     resw 4
 
 section .text
 
 win_init:
     push    rbx
+    push    r12
+    mov     r12, rdi
+    call    term_init
+
+    mov     rdi, r12
     call    wl_connect
     test    rax, rax
     js      .ret
@@ -117,6 +137,7 @@ win_init:
     call    wl_flush
     mov     rax, rbx
 .ret:
+    pop     r12
     pop     rbx
     ret
 .fail:
@@ -166,8 +187,60 @@ win_update:
     call    buffer_create
     test    rax, rax
     js      .fail
-    call    draw
+
+    mov     eax, [buf_w]
+    sub     eax, PAD_X * 2
+    xor     edx, edx
+    mov     ecx, FONT_W
+    div     ecx
+    mov     edi, eax
+
+    mov     eax, [buf_h]
+    sub     eax, PAD_Y * 2
+    xor     edx, edx
+    mov     ecx, FONT_H
+    div     ecx
+    mov     esi, eax
+
+    call    term_resize
+    call    update_pty_winsize
+
 .present:
+    call    win_redraw
+.flush:
+    jmp     wl_flush
+.fail:
+    mov     byte [close_requested], 1
+    ret
+
+update_pty_winsize:
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .ret
+    mov     eax, [term_rows]
+    mov     [winsize_struct], ax
+    mov     eax, [term_cols]
+    mov     [winsize_struct + 2], ax
+    mov     eax, [buf_w]
+    mov     [winsize_struct + 4], ax
+    mov     eax, [buf_h]
+    mov     [winsize_struct + 6], ax
+    mov     eax, SYS_IOCTL
+    mov     esi, TIOCSWINSZ
+    lea     rdx, [winsize_struct]
+    syscall
+.ret:
+    ret
+
+win_redraw:
+    cmp     qword [buf_ptr], 0
+    je      .ret
+
+    mov     rdi, [buf_ptr]
+    mov     esi, [buf_w]
+    mov     edx, [buf_h]
+    call    term_render
+
     WL_BEGIN [id_surface], WL_SURFACE_ATTACH
     WL_U32  [id_buffer]
     WL_U32  0
@@ -183,10 +256,8 @@ win_update:
 
     WL_BEGIN [id_surface], WL_SURFACE_COMMIT
     WL_END
-.flush:
-    jmp     wl_flush
-.fail:
-    mov     byte [close_requested], 1
+    call    wl_flush
+.ret:
     ret
 
 buffer_create:
@@ -276,35 +347,6 @@ buffer_create:
     mov     rax, -1
     jmp     .ret
 
-draw:
-    mov     rdi, [buf_ptr]
-    mov     ecx, [buf_w]
-    imul    ecx, [buf_h]
-    mov     eax, BG_COLOR
-    rep     stosd
-
-    cmp     dword [buf_w], PAD * 2 + CELL_W
-    jb      .ret
-    cmp     dword [buf_h], PAD * 2 + CELL_H
-    jb      .ret
-    mov     r8d, [buf_w]
-    shl     r8, 2
-    mov     rdi, r8
-    imul    rdi, PAD
-    add     rdi, [buf_ptr]
-    add     rdi, PAD * 4
-    mov     edx, CELL_H
-    mov     eax, CURSOR_COLOR
-.row:
-    mov     rsi, rdi
-    mov     ecx, CELL_W
-    rep     stosd
-    lea     rdi, [rsi + r8]
-    dec     edx
-    jnz     .row
-.ret:
-    ret
-
 on_event:
     cmp     edi, WL_DISPLAY_ID
     je      .display
@@ -318,6 +360,10 @@ on_event:
     je      .xdg_surface
     cmp     edi, [id_toplevel]
     je      .toplevel
+    cmp     edi, [id_seat]
+    je      .seat
+    cmp     edi, [id_keyboard]
+    je      .keyboard
     ret
 
 .display:
@@ -385,6 +431,52 @@ on_event:
     mov     byte [close_requested], 1
     ret
 
+.seat:
+    cmp     esi, WL_SEAT_CAPABILITIES
+    jne     .ret
+    mov     eax, [rdx]
+    test    eax, WL_SEAT_CAP_KEYBOARD
+    jz      .ret
+    cmp     dword [id_keyboard], 0
+    jne     .ret
+    call    wl_new_id
+    mov     [id_keyboard], eax
+    WL_BEGIN [id_seat], WL_SEAT_GET_KEYBOARD
+    WL_U32  [id_keyboard]
+    WL_END
+    ret
+
+.keyboard:
+    cmp     esi, WL_KEYBOARD_KEY
+    je      .kbd_key
+    cmp     esi, WL_KEYBOARD_MODIFIERS
+    je      .kbd_mod
+    ret
+
+.kbd_key:
+    mov     edi, [rdx + 8]
+    mov     esi, [rdx + 12]
+    call    kbd_handle_key
+
+    mov     edx, [kbd_input_len]
+    test    edx, edx
+    jz      .ret
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .ret
+    lea     rsi, [kbd_input_buf]
+    call    write_all
+    ret
+
+.kbd_mod:
+    mov     edi, [rdx + 4]
+    mov     esi, [rdx + 8]
+    mov     r8d, [rdx + 12]
+    mov     ecx, [rdx + 16]
+    mov     edx, r8d
+    call    kbd_handle_modifiers
+    ret
+
 .registry:
     cmp     esi, WL_REGISTRY_GLOBAL
     jne     .ret
@@ -407,6 +499,7 @@ on_event:
     lea     r8, [s_compositor]
     lea     r9, [id_compositor]
     jmp     .bind
+
 .not_compositor:
     mov     rdi, rbx
     lea     rsi, [s_shm]
@@ -417,15 +510,28 @@ on_event:
     lea     r8, [s_shm]
     lea     r9, [id_shm]
     jmp     .bind
+
 .not_shm:
     mov     rdi, rbx
     lea     rsi, [s_wm_base]
     call    streq
     test    eax, eax
-    jz      .registry_done
+    jz      .not_wm_base
     mov     ecx, 1
     lea     r8, [s_wm_base]
     lea     r9, [id_wm_base]
+    jmp     .bind
+
+.not_wm_base:
+    mov     rdi, rbx
+    lea     rsi, [s_seat]
+    call    streq
+    test    eax, eax
+    jz      .registry_done
+    mov     ecx, 7
+    lea     r8, [s_seat]
+    lea     r9, [id_seat]
+
 .bind:
     cmp     r13d, ecx
     cmova   r13d, ecx
@@ -441,6 +547,7 @@ on_event:
     pop     rdi
     call    wl_u32
     WL_END
+
 .registry_done:
     pop     r13
     pop     r12
