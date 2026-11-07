@@ -16,6 +16,9 @@ global term_has_sel
 global term_set_sel_start
 global term_update_sel_end
 global term_clear_sel
+global term_scroll_view_up
+global term_scroll_view_down
+global term_scroll_view_to_bottom
 
 extern font_glyph_data
 extern font_glyph_for_char
@@ -25,6 +28,7 @@ extern win_pty_fd
 %define MAX_COLS       256
 %define MAX_ROWS       128
 %define CELL_SIZE      16
+%define SCROLLBACK_MAX 1024
 
 %define COLOR_BG       0x000000
 %define COLOR_FG       0xc9d1d9
@@ -53,6 +57,11 @@ term_sel_end_col:   resd 1
 term_sel_end_row:   resd 1
 term_has_sel:       resb 1
 
+cur_row_ptr:        resq 1
+scrollback_count:   resd 1
+scrollback_head:    resd 1
+scroll_offset:      resd 1
+
 esc_state:          resd 1
 csi_argc:           resd 1
 csi_args:           resd 16
@@ -63,6 +72,8 @@ cursor_visible:     resb 1
 cpr_buf:            resb 32
 
 grid:               resb MAX_COLS * MAX_ROWS * CELL_SIZE
+scrollback:         resb SCROLLBACK_MAX * MAX_COLS * CELL_SIZE
+empty_line:         resb MAX_COLS * CELL_SIZE
 
 section .rodata
 ansi_colors:
@@ -86,7 +97,27 @@ term_init:
     mov     dword [utf8_state], 0
     mov     byte [cursor_visible], 1
     mov     byte [term_has_sel], 0
+    mov     dword [scrollback_count], 0
+    mov     dword [scrollback_head], 0
+    mov     dword [scroll_offset], 0
+    call    init_empty_line
     call    term_clear_grid
+    ret
+
+init_empty_line:
+    lea     rdi, [empty_line]
+    mov     ecx, MAX_COLS
+    mov     eax, ' '
+    mov     edx, [cur_fg]
+    mov     r8d, [cur_bg]
+.el_fill:
+    mov     dword [rdi], eax
+    mov     dword [rdi + 4], edx
+    mov     dword [rdi + 8], r8d
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     ecx
+    jnz     .el_fill
     ret
 
 term_set_sel_start:
@@ -426,6 +457,33 @@ term_process_char:
     ret
 
 term_scroll_up:
+    push    rbx
+    push    rsi
+    push    rdi
+
+    mov     eax, [scrollback_head]
+    imul    eax, MAX_COLS * CELL_SIZE
+    lea     rdi, [scrollback + rax]
+    lea     rsi, [grid]
+    mov     ecx, [term_cols]
+    shl     ecx, 2
+    rep     movsd
+
+    mov     eax, [scrollback_head]
+    inc     eax
+    cmp     eax, SCROLLBACK_MAX
+    jb      .sb_h_ok
+    xor     eax, eax
+.sb_h_ok:
+    mov     [scrollback_head], eax
+
+    mov     eax, [scrollback_count]
+    cmp     eax, SCROLLBACK_MAX
+    jae     .sb_c_ok
+    inc     eax
+    mov     [scrollback_count], eax
+.sb_c_ok:
+
     lea     rdi, [grid]
     lea     rsi, [grid + MAX_COLS * CELL_SIZE]
     mov     ecx, [term_rows]
@@ -450,6 +508,10 @@ term_scroll_up:
     add     rdi, CELL_SIZE
     dec     ecx
     jnz     .clear_last
+
+    pop     rdi
+    pop     rsi
+    pop     rbx
     ret
 
 term_scroll_down:
@@ -483,6 +545,66 @@ term_scroll_down:
     jnz     .clear_first
     pop     rdi
     pop     rsi
+    ret
+
+term_scroll_view_up:
+    mov     eax, [scroll_offset]
+    add     eax, edi
+    cmp     eax, [scrollback_count]
+    jbe     .up_ok
+    mov     eax, [scrollback_count]
+.up_ok:
+    mov     [scroll_offset], eax
+    ret
+
+term_scroll_view_down:
+    mov     eax, [scroll_offset]
+    sub     eax, edi
+    jns     .down_ok
+    xor     eax, eax
+.down_ok:
+    mov     [scroll_offset], eax
+    ret
+
+term_scroll_view_to_bottom:
+    mov     dword [scroll_offset], 0
+    ret
+
+get_row_ptr:
+    mov     eax, [term_rows]
+    dec     eax
+    sub     eax, edi
+    add     eax, [scroll_offset]
+    cmp     eax, [term_rows]
+    jae     .in_scrollback
+
+    mov     ecx, [term_rows]
+    dec     ecx
+    sub     ecx, eax
+    imul    rcx, MAX_COLS * CELL_SIZE
+    lea     rax, [grid + rcx]
+    ret
+
+.in_scrollback:
+    sub     eax, [term_rows]
+    cmp     eax, [scrollback_count]
+    jae     .empty_row
+
+    mov     ecx, [scrollback_head]
+    dec     ecx
+    sub     ecx, eax
+.mod_loop:
+    test    ecx, ecx
+    jns     .mod_done
+    add     ecx, SCROLLBACK_MAX
+    jmp     .mod_loop
+.mod_done:
+    imul    rcx, MAX_COLS * CELL_SIZE
+    lea     rax, [scrollback + rcx]
+    ret
+
+.empty_row:
+    lea     rax, [empty_line]
     ret
 
 term_handle_csi:
@@ -1154,16 +1276,18 @@ term_render:
 .row_loop:
     cmp     r15d, [term_rows]
     jae     .draw_cursor
+    mov     edi, r15d
+    call    get_row_ptr
+    mov     [cur_row_ptr], rax
     xor     ebp, ebp
 .col_loop:
     cmp     ebp, [term_cols]
     jae     .row_next
 
-    mov     eax, r15d
-    imul    eax, MAX_COLS
-    add     eax, ebp
-    shl     eax, 4
-    lea     rbx, [grid + rax]
+    mov     rax, [cur_row_ptr]
+    mov     ecx, ebp
+    shl     ecx, 4
+    lea     rbx, [rax + rcx]
 
     mov     edi, [rbx]
     mov     r8d, [rbx + 4]
@@ -1208,6 +1332,8 @@ term_render:
     jmp     .row_loop
 
 .draw_cursor:
+    cmp     dword [scroll_offset], 0
+    jne     .render_done
     cmp     byte [cursor_visible], 0
     je      .render_done
 
@@ -1257,32 +1383,50 @@ draw_glyph:
     add     ecx, eax
     lea     r11, [rdi + rcx*4]
 
+    pxor    xmm7, xmm7
+    movd    xmm0, r8d
+    movd    xmm1, r9d
+    punpcklbw xmm0, xmm7
+    punpcklbw xmm1, xmm7
+    movdqa  xmm4, xmm0
+    psubw   xmm4, xmm1
+
     xor     ebx, ebx
 .line_loop:
     cmp     ebx, FONT_H
     jae     .done
 
-    movzx   r12d, byte [rsi]
-    shl     r12d, 8
-    movzx   eax, byte [rsi + 1]
-    or      r12d, eax
-    add     rsi, 2
-
     mov     rdi, r11
     mov     ecx, FONT_W
-    mov     r13d, 0x8000
 
 .pixel_loop:
-    test    r12d, r13d
+    movzx   eax, byte [rsi]
+    inc     rsi
+    test    eax, eax
     jz      .bg_pixel
-    mov     eax, r8d
-    jmp     .write_pixel
-.bg_pixel:
-    mov     eax, r9d
-.write_pixel:
+    cmp     eax, 255
+    je      .fg_pixel
+
+    movd    xmm2, eax
+    pshuflw xmm2, xmm2, 0
+    movdqa  xmm0, xmm4
+    pmullw  xmm0, xmm2
+    psraw   xmm0, 8
+    paddw   xmm0, xmm1
+    packuswb xmm0, xmm7
+    movd    eax, xmm0
     mov     [rdi], eax
+    jmp     .next_pixel
+
+.bg_pixel:
+    mov     [rdi], r9d
+    jmp     .next_pixel
+
+.fg_pixel:
+    mov     [rdi], r8d
+
+.next_pixel:
     add     rdi, 4
-    shr     r13d, 1
     dec     ecx
     jnz     .pixel_loop
 

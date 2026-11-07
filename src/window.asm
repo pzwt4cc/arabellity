@@ -26,6 +26,9 @@ extern term_resize
 extern term_render
 extern term_cols
 extern term_rows
+extern term_scroll_view_up
+extern term_scroll_view_down
+extern term_scroll_view_to_bottom
 extern term_set_sel_start
 extern term_update_sel_end
 extern term_clear_sel
@@ -497,6 +500,14 @@ on_event:
 .kbd_key:
     mov     edi, [rdx + 8]
     mov     esi, [rdx + 12]
+    push    rdi
+    push    rsi
+    test    esi, esi
+    jz      .no_scroll_reset
+    call    term_scroll_view_to_bottom
+.no_scroll_reset:
+    pop     rsi
+    pop     rdi
     call    kbd_handle_key
 
     mov     edx, [kbd_input_len]
@@ -525,6 +536,27 @@ on_event:
     je      .ptr_button
     cmp     esi, WL_POINTER_ENTER
     je      .ptr_enter
+    cmp     esi, WL_POINTER_AXIS
+    je      .ptr_axis
+    ret
+
+.ptr_axis:
+    mov     eax, [rdx + 4]
+    test    eax, eax
+    jnz     .ret
+    mov     eax, [rdx + 8]
+    test    eax, eax
+    js      .scroll_up
+    jle     .ret
+.scroll_down:
+    mov     edi, 3
+    call    term_scroll_view_down
+    call    win_redraw
+    ret
+.scroll_up:
+    mov     edi, 3
+    call    term_scroll_view_up
+    call    win_redraw
     ret
 
 .ptr_enter:

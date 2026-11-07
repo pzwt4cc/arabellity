@@ -8,7 +8,7 @@ global FONT_BPG
 
 %define FONT_WIDTH  10
 %define FONT_HEIGHT 20
-%define FONT_BPG    40
+%define FONT_BPG    200
 
 section .rodata
 font_data:

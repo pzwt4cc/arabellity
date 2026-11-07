@@ -39,6 +39,7 @@
 %define WL_POINTER_LEAVE                1
 %define WL_POINTER_MOTION               2
 %define WL_POINTER_BUTTON               3
+%define WL_POINTER_AXIS                 4
 
 %define XDG_WM_BASE_GET_XDG_SURFACE     2
 %define XDG_WM_BASE_PONG                3
