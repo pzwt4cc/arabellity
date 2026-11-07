@@ -6,7 +6,7 @@ FONT_PATH = '/usr/share/fonts/TTF/JetBrainsMonoNerdFontMono-Medium.ttf'
 OUT_PATH = 'assets/nerd_font.bin'
 WIDTH = 10
 HEIGHT = 20
-FONT_SIZE = 16
+FONT_SIZE = 15
 
 font = TTFont(FONT_PATH)
 cmap = font.getBestCmap()
@@ -16,29 +16,32 @@ unique_glyphs = {}
 glyph_data = bytearray()
 mapping = []
 
-# Glyph 0: blank (space)
 blank = bytes(WIDTH * HEIGHT)
 unique_glyphs[blank] = 0
 glyph_data.extend(blank)
 
-# Glyph 1: '?' fallback
-im_q = Image.new('L', (WIDTH, HEIGHT), 0)
-d_q = ImageDraw.Draw(im_q)
-d_q.text((0, 0), '?', font=pfont, fill=255)
-q_bytes = bytes(im_q.tobytes())
+def render_char(ch, cp):
+    im = Image.new('L', (WIDTH, HEIGHT), 0)
+    d = ImageDraw.Draw(im)
+    d.text((0, 0), ch, font=pfont, fill=255)
+    raw = bytearray(im.tobytes())
+    if 0x2500 <= cp <= 0x257F:
+        for y in range(HEIGHT):
+            if raw[y * WIDTH + 8] > 128:
+                raw[y * WIDTH + 9] = raw[y * WIDTH + 8]
+    return bytes(raw)
+
+q_bytes = render_char('?', 63)
 unique_glyphs[q_bytes] = 1
 glyph_data.extend(q_bytes)
 
 for cp in sorted(cmap.keys()):
     if cp > 0x10ffff or (0xd800 <= cp <= 0xdfff):
         continue
-    im = Image.new('L', (WIDTH, HEIGHT), 0)
-    d = ImageDraw.Draw(im)
     try:
-        d.text((0, 0), chr(cp), font=pfont, fill=255)
+        raw = render_char(chr(cp), cp)
     except:
         continue
-    raw = bytes(im.tobytes())
     if raw not in unique_glyphs:
         idx = len(unique_glyphs)
         unique_glyphs[raw] = idx

@@ -1388,8 +1388,6 @@ draw_glyph:
     movd    xmm1, r9d
     punpcklbw xmm0, xmm7
     punpcklbw xmm1, xmm7
-    movdqa  xmm4, xmm0
-    psubw   xmm4, xmm1
 
     xor     ebx, ebx
 .line_loop:
@@ -1409,12 +1407,22 @@ draw_glyph:
 
     movd    xmm2, eax
     pshuflw xmm2, xmm2, 0
-    movdqa  xmm0, xmm4
-    pmullw  xmm0, xmm2
-    psraw   xmm0, 8
-    paddw   xmm0, xmm1
-    packuswb xmm0, xmm7
-    movd    eax, xmm0
+    mov     r12d, 256
+    sub     r12d, eax
+    movd    xmm3, r12d
+    pshuflw xmm3, xmm3, 0
+
+    movdqa  xmm5, xmm0
+    pmullw  xmm5, xmm2
+    psrlw   xmm5, 8
+
+    movdqa  xmm6, xmm1
+    pmullw  xmm6, xmm3
+    psrlw   xmm6, 8
+
+    paddw   xmm5, xmm6
+    packuswb xmm5, xmm7
+    movd    eax, xmm5
     mov     [rdi], eax
     jmp     .next_pixel
 
