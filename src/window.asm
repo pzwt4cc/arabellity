@@ -25,6 +25,13 @@ extern term_resize
 extern term_render
 extern term_cols
 extern term_rows
+extern term_set_sel_start
+extern term_update_sel_end
+extern term_clear_sel
+extern term_sel_start_col
+extern term_sel_start_row
+extern term_sel_end_col
+extern term_sel_end_row
 extern kbd_handle_key
 extern kbd_handle_modifiers
 extern kbd_input_buf
@@ -60,6 +67,10 @@ id_shm:             resd 1
 id_wm_base:         resd 1
 id_seat:            resd 1
 id_keyboard:        resd 1
+id_pointer:         resd 1
+mouse_x:            resd 1
+mouse_y:            resd 1
+mouse_pressed:      resb 1
 id_surface:         resd 1
 id_xdg_surface:     resd 1
 id_toplevel:        resd 1
@@ -80,6 +91,8 @@ win_init:
     push    rbx
     push    r12
     mov     r12, rdi
+    mov     dword [id_pointer], 0
+    mov     byte [mouse_pressed], 0
     call    term_init
 
     mov     rdi, r12
@@ -364,6 +377,8 @@ on_event:
     je      .seat
     cmp     edi, [id_keyboard]
     je      .keyboard
+    cmp     edi, [id_pointer]
+    je      .pointer
     ret
 
 .display:
@@ -436,13 +451,24 @@ on_event:
     jne     .ret
     mov     eax, [rdx]
     test    eax, WL_SEAT_CAP_KEYBOARD
-    jz      .ret
+    jz      .check_ptr
     cmp     dword [id_keyboard], 0
-    jne     .ret
+    jne     .check_ptr
     call    wl_new_id
     mov     [id_keyboard], eax
     WL_BEGIN [id_seat], WL_SEAT_GET_KEYBOARD
     WL_U32  [id_keyboard]
+    WL_END
+.check_ptr:
+    mov     eax, [rdx]
+    test    eax, WL_SEAT_CAP_POINTER
+    jz      .ret
+    cmp     dword [id_pointer], 0
+    jne     .ret
+    call    wl_new_id
+    mov     [id_pointer], eax
+    WL_BEGIN [id_seat], WL_SEAT_GET_POINTER
+    WL_U32  [id_pointer]
     WL_END
     ret
 
@@ -475,6 +501,61 @@ on_event:
     mov     ecx, [rdx + 16]
     mov     edx, r8d
     call    kbd_handle_modifiers
+    ret
+
+.pointer:
+    cmp     esi, WL_POINTER_MOTION
+    je      .ptr_motion
+    cmp     esi, WL_POINTER_BUTTON
+    je      .ptr_button
+    cmp     esi, WL_POINTER_ENTER
+    je      .ptr_enter
+    ret
+
+.ptr_enter:
+    mov     eax, [rdx + 8]
+    mov     [mouse_x], eax
+    mov     eax, [rdx + 12]
+    mov     [mouse_y], eax
+    ret
+
+.ptr_motion:
+    mov     eax, [rdx + 4]
+    mov     [mouse_x], eax
+    mov     r8d, [rdx + 8]
+    mov     [mouse_y], r8d
+    cmp     byte [mouse_pressed], 0
+    jz      .ret
+    call    coord_to_cell
+    call    term_update_sel_end
+    call    win_redraw
+    ret
+
+.ptr_button:
+    mov     eax, [rdx + 8]
+    cmp     eax, 272
+    jne     .ret
+    mov     eax, [rdx + 12]
+    test    eax, eax
+    jz      .btn_released
+    mov     byte [mouse_pressed], 1
+    mov     eax, [mouse_x]
+    mov     r8d, [mouse_y]
+    call    coord_to_cell
+    call    term_set_sel_start
+    call    win_redraw
+    ret
+
+.btn_released:
+    mov     byte [mouse_pressed], 0
+    mov     eax, [term_sel_start_col]
+    cmp     eax, [term_sel_end_col]
+    jne     .ret
+    mov     eax, [term_sel_start_row]
+    cmp     eax, [term_sel_end_row]
+    jne     .ret
+    call    term_clear_sel
+    call    win_redraw
     ret
 
 .registry:
@@ -553,4 +634,47 @@ on_event:
     pop     r12
     pop     rbx
 .ret:
+    ret
+
+coord_to_cell:
+    sar     eax, 8
+    sub     eax, PAD_X
+    jns     .x_ok
+    xor     eax, eax
+.x_ok:
+    xor     edx, edx
+    mov     ecx, FONT_W
+    div     ecx
+    mov     edi, eax
+    mov     eax, [term_cols]
+    test    eax, eax
+    jz      .col_zero
+    dec     eax
+    cmp     edi, eax
+    cmova   edi, eax
+    jmp     .col_done
+.col_zero:
+    xor     edi, edi
+.col_done:
+
+    sar     r8d, 8
+    sub     r8d, PAD_Y
+    jns     .y_ok
+    xor     r8d, r8d
+.y_ok:
+    mov     eax, r8d
+    xor     edx, edx
+    mov     ecx, FONT_H
+    div     ecx
+    mov     esi, eax
+    mov     eax, [term_rows]
+    test    eax, eax
+    jz      .row_zero
+    dec     eax
+    cmp     esi, eax
+    cmova   esi, eax
+    jmp     .row_done
+.row_zero:
+    xor     esi, esi
+.row_done:
     ret

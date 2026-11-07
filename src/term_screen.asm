@@ -8,6 +8,14 @@ global term_cols
 global term_rows
 global term_cursor_col
 global term_cursor_row
+global term_sel_start_col
+global term_sel_start_row
+global term_sel_end_col
+global term_sel_end_row
+global term_has_sel
+global term_set_sel_start
+global term_update_sel_end
+global term_clear_sel
 
 extern font_glyph_data
 extern font_glyph_for_char
@@ -21,6 +29,8 @@ extern win_pty_fd
 %define COLOR_BG       0x0d1117
 %define COLOR_FG       0xc9d1d9
 %define COLOR_CURSOR   0x39ff14
+%define COLOR_SEL_BG   0x264f78
+%define COLOR_SEL_FG   0xffffff
 %define PAD_X          8
 %define PAD_Y          8
 
@@ -36,6 +46,12 @@ saved_cursor_col:   resd 1
 saved_cursor_row:   resd 1
 cur_fg:             resd 1
 cur_bg:             resd 1
+
+term_sel_start_col: resd 1
+term_sel_start_row: resd 1
+term_sel_end_col:   resd 1
+term_sel_end_row:   resd 1
+term_has_sel:       resb 1
 
 esc_state:          resd 1
 csi_argc:           resd 1
@@ -69,7 +85,25 @@ term_init:
     mov     dword [esc_state], 0
     mov     dword [utf8_state], 0
     mov     byte [cursor_visible], 1
+    mov     byte [term_has_sel], 0
     call    term_clear_grid
+    ret
+
+term_set_sel_start:
+    mov     [term_sel_start_col], edi
+    mov     [term_sel_start_row], esi
+    mov     [term_sel_end_col], edi
+    mov     [term_sel_end_row], esi
+    mov     byte [term_has_sel], 1
+    ret
+
+term_update_sel_end:
+    mov     [term_sel_end_col], edi
+    mov     [term_sel_end_row], esi
+    ret
+
+term_clear_sel:
+    mov     byte [term_has_sel], 0
     ret
 
 term_clear_grid:
@@ -1042,7 +1076,6 @@ send_cpr:
     ret
 
 format_u32:
-    push    rdi
     xor     ecx, ecx
     mov     ebx, 10
 .f_div:
@@ -1052,12 +1085,6 @@ format_u32:
     inc     ecx
     test    eax, eax
     jnz     .f_div
-    pop     rdx
-    add     dl, '0'
-    mov     [rdi], dl
-    inc     rdi
-    dec     ecx
-    jz      .f_end
 .f_pop:
     pop     rdx
     add     dl, '0'
@@ -1065,7 +1092,44 @@ format_u32:
     inc     rdi
     dec     ecx
     jnz     .f_pop
-.f_end:
+    ret
+
+is_cell_selected:
+    cmp     byte [term_has_sel], 0
+    jz      .no
+
+    mov     r8d, [term_sel_start_row]
+    mov     r9d, [term_sel_start_col]
+    mov     r10d, [term_sel_end_row]
+    mov     r11d, [term_sel_end_col]
+
+    cmp     r8d, r10d
+    jb      .ordered
+    ja      .swap
+    cmp     r9d, r11d
+    jbe     .ordered
+.swap:
+    xchg    r8d, r10d
+    xchg    r9d, r11d
+.ordered:
+    cmp     esi, r8d
+    jb      .no
+    cmp     esi, r10d
+    ja      .no
+    cmp     esi, r8d
+    jne     .not_start_row
+    cmp     edi, r9d
+    jb      .no
+.not_start_row:
+    cmp     esi, r10d
+    jne     .yes
+    cmp     edi, r11d
+    ja      .no
+.yes:
+    mov     eax, 1
+    ret
+.no:
+    xor     eax, eax
     ret
 
 term_render:
@@ -1105,6 +1169,20 @@ term_render:
     mov     r8d, [rbx + 4]
     mov     r9d, [rbx + 8]
 
+    push    rdi
+    push    r8
+    push    r9
+    mov     edi, ebp
+    mov     esi, r15d
+    call    is_cell_selected
+    test    eax, eax
+    pop     r9
+    pop     r8
+    pop     rdi
+    jz      .not_sel
+    mov     r8d, COLOR_SEL_FG
+    mov     r9d, COLOR_SEL_BG
+.not_sel:
     push    r8
     push    r9
     call    font_glyph_for_char
