@@ -12,32 +12,49 @@ global FONT_BPG
 
 section .rodata
 font_data:
-    incbin "assets/ter-v20n.psf"
-
-%include "cyr_table.inc"
+    incbin "assets/nerd_font.bin"
 
 section .text
 
 font_glyph_data:
     imul    rax, rdi, FONT_BPG
-    lea     rdx, [font_data + 32]
+    lea     rdx, [font_data + 8]
     add     rax, rdx
     ret
 
 font_glyph_for_char:
-    cmp     edi, 0x80
-    jb      .ascii
-    cmp     edi, 0x400
-    jb      .fallback
-    cmp     edi, 0x460
-    jae     .fallback
-    sub     edi, 0x400
-    lea     rax, [cyr_to_glyph]
-    movzx   eax, word [rax + rdi*2]
+    mov     r8d, [font_data]
+    mov     r9d, [font_data + 4]
+    test    r9d, r9d
+    jz      .fallback
+
+    imul    rax, r8, FONT_BPG
+    lea     rsi, [font_data + 8]
+    add     rsi, rax
+
+    xor     eax, eax
+    mov     edx, r9d
+    dec     edx
+
+.bin_search:
+    cmp     eax, edx
+    ja      .fallback
+    lea     ecx, [rax + rdx]
+    shr     ecx, 1
+    mov     r10d, [rsi + rcx*8]
+    cmp     edi, r10d
+    je      .found
+    jb      .left
+    lea     eax, [rcx + 1]
+    jmp     .bin_search
+.left:
+    lea     edx, [rcx - 1]
+    jmp     .bin_search
+
+.found:
+    mov     eax, [rsi + rcx*8 + 4]
     ret
-.ascii:
-    mov     eax, edi
-    ret
+
 .fallback:
-    mov     eax, '?'
-    ret
+    mov     edi, '?'
+    jmp     font_glyph_for_char

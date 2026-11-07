@@ -11,6 +11,8 @@ global term_cursor_row
 
 extern font_glyph_data
 extern font_glyph_for_char
+extern write_all
+extern win_pty_fd
 
 %define MAX_COLS       256
 %define MAX_ROWS       128
@@ -30,14 +32,19 @@ term_cols:          resd 1
 term_rows:          resd 1
 term_cursor_col:    resd 1
 term_cursor_row:    resd 1
+saved_cursor_col:   resd 1
+saved_cursor_row:   resd 1
 cur_fg:             resd 1
 cur_bg:             resd 1
 
 esc_state:          resd 1
 csi_argc:           resd 1
 csi_args:           resd 16
+csi_private:        resb 1
 utf8_state:         resd 1
 utf8_codepoint:     resd 1
+cursor_visible:     resb 1
+cpr_buf:            resb 32
 
 grid:               resb MAX_COLS * MAX_ROWS * CELL_SIZE
 
@@ -55,10 +62,13 @@ term_init:
     mov     dword [term_rows], 24
     mov     dword [term_cursor_col], 0
     mov     dword [term_cursor_row], 0
+    mov     dword [saved_cursor_col], 0
+    mov     dword [saved_cursor_row], 0
     mov     dword [cur_fg], COLOR_FG
     mov     dword [cur_bg], COLOR_BG
     mov     dword [esc_state], 0
     mov     dword [utf8_state], 0
+    mov     byte [cursor_visible], 1
     call    term_clear_grid
     ret
 
@@ -213,12 +223,48 @@ term_process_char:
     je      .to_osc
     cmp     edi, 'c'
     je      .reset
+    cmp     edi, '7'
+    je      .save_cursor
+    cmp     edi, '8'
+    je      .restore_cursor
+    cmp     edi, 'M'
+    je      .reverse_index
+    mov     dword [esc_state], 0
+    ret
+
+.save_cursor:
+    mov     eax, [term_cursor_col]
+    mov     [saved_cursor_col], eax
+    mov     eax, [term_cursor_row]
+    mov     [saved_cursor_row], eax
+    mov     dword [esc_state], 0
+    ret
+
+.restore_cursor:
+    mov     eax, [saved_cursor_col]
+    mov     [term_cursor_col], eax
+    mov     eax, [saved_cursor_row]
+    mov     [term_cursor_row], eax
+    mov     dword [esc_state], 0
+    ret
+
+.reverse_index:
+    mov     eax, [term_cursor_row]
+    test    eax, eax
+    jz      .ri_scroll
+    dec     eax
+    mov     [term_cursor_row], eax
+    mov     dword [esc_state], 0
+    ret
+.ri_scroll:
+    call    term_scroll_down
     mov     dword [esc_state], 0
     ret
 
 .to_csi:
     mov     dword [esc_state], 2
     mov     dword [csi_argc], 0
+    mov     byte [csi_private], 0
     lea     rax, [csi_args]
     mov     dword [rax], 0
     ret
@@ -238,6 +284,12 @@ term_process_char:
     ret
 
 .state_csi:
+    cmp     edi, '?'
+    jne     .csi_not_priv
+    mov     byte [csi_private], 1
+    ret
+
+.csi_not_priv:
     cmp     edi, '0'
     jb      .csi_not_digit
     cmp     edi, '9'
@@ -255,7 +307,7 @@ term_process_char:
 .csi_not_digit:
     cmp     edi, ';'
     je      .csi_sep
-    cmp     edi, '?'
+    cmp     edi, '$'
     je      .ret
     push    rdi
     mov     eax, [csi_argc]
@@ -366,7 +418,43 @@ term_scroll_up:
     jnz     .clear_last
     ret
 
+term_scroll_down:
+    push    rsi
+    push    rdi
+    mov     eax, [term_rows]
+    dec     eax
+    imul    eax, MAX_COLS
+    shl     eax, 4
+    lea     rdi, [grid + rax]
+    lea     rsi, [rdi - MAX_COLS * CELL_SIZE]
+    mov     ecx, [term_rows]
+    dec     ecx
+    imul    ecx, MAX_COLS * (CELL_SIZE / 4)
+    std
+    rep     movsd
+    cld
+
+    lea     rdi, [grid]
+    mov     ecx, [term_cols]
+    mov     eax, ' '
+    mov     edx, [cur_fg]
+    mov     r8d, [cur_bg]
+.clear_first:
+    mov     [rdi], eax
+    mov     [rdi + 4], edx
+    mov     [rdi + 8], r8d
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     ecx
+    jnz     .clear_first
+    pop     rdi
+    pop     rsi
+    ret
+
 term_handle_csi:
+    cmp     byte [csi_private], 1
+    je      .csi_priv
+
     cmp     edi, 'm'
     je      .sgr
     cmp     edi, 'H'
@@ -385,6 +473,144 @@ term_handle_csi:
     je      .cuf
     cmp     edi, 'D'
     je      .cub
+    cmp     edi, 'G'
+    je      .cha
+    cmp     edi, 'd'
+    je      .vpa
+    cmp     edi, 'n'
+    je      .dsr
+    cmp     edi, 's'
+    je      .save_cursor_csi
+    cmp     edi, 'u'
+    je      .restore_cursor_csi
+    cmp     edi, 'P'
+    je      .dch
+    cmp     edi, '@'
+    je      .ich
+    ret
+
+.csi_priv:
+    cmp     edi, 'h'
+    je      .priv_set
+    cmp     edi, 'l'
+    je      .priv_reset
+    ret
+
+.priv_set:
+    lea     rdx, [csi_args]
+    mov     eax, [rdx]
+    cmp     eax, 25
+    jne     .priv_ret
+    mov     byte [cursor_visible], 1
+.priv_ret:
+    ret
+
+.priv_reset:
+    lea     rdx, [csi_args]
+    mov     eax, [rdx]
+    cmp     eax, 25
+    jne     .priv_ret
+    mov     byte [cursor_visible], 0
+    ret
+
+.save_cursor_csi:
+    mov     eax, [term_cursor_col]
+    mov     [saved_cursor_col], eax
+    mov     eax, [term_cursor_row]
+    mov     [saved_cursor_row], eax
+    ret
+
+.restore_cursor_csi:
+    mov     eax, [saved_cursor_col]
+    mov     [term_cursor_col], eax
+    mov     eax, [saved_cursor_row]
+    mov     [term_cursor_row], eax
+    ret
+
+.cha:
+    lea     rdx, [csi_args]
+    mov     eax, [rdx]
+    test    eax, eax
+    jnz     .cha_v
+    mov     eax, 1
+.cha_v:
+    dec     eax
+    cmp     eax, [term_cols]
+    jb      .cha_ok
+    mov     eax, [term_cols]
+    dec     eax
+.cha_ok:
+    mov     [term_cursor_col], eax
+    ret
+
+.vpa:
+    lea     rdx, [csi_args]
+    mov     eax, [rdx]
+    test    eax, eax
+    jnz     .vpa_v
+    mov     eax, 1
+.vpa_v:
+    dec     eax
+    cmp     eax, [term_rows]
+    jb      .vpa_ok
+    mov     eax, [term_rows]
+    dec     eax
+.vpa_ok:
+    mov     [term_cursor_row], eax
+    ret
+
+.dch:
+    lea     rdx, [csi_args]
+    mov     eax, [rdx]
+    test    eax, eax
+    jnz     .dch_v
+    mov     eax, 1
+.dch_v:
+    mov     r8d, eax
+    mov     eax, [term_cursor_row]
+    imul    eax, MAX_COLS
+    add     eax, [term_cursor_col]
+    shl     eax, 4
+    lea     rdi, [grid + rax]
+    mov     ecx, [term_cols]
+    sub     ecx, [term_cursor_col]
+    sub     ecx, r8d
+    jle     .dch_clear
+    mov     rax, r8
+    shl     rax, 4
+    lea     rsi, [rdi + rax]
+    rep     movsd
+.dch_clear:
+    mov     eax, [term_cursor_row]
+    imul    eax, MAX_COLS
+    add     eax, [term_cols]
+    sub     eax, r8d
+    shl     eax, 4
+    lea     rdi, [grid + rax]
+    mov     ecx, r8d
+    mov     eax, ' '
+    mov     edx, [cur_fg]
+    mov     r9d, [cur_bg]
+.dch_loop:
+    mov     [rdi], eax
+    mov     [rdi + 4], edx
+    mov     [rdi + 8], r9d
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     ecx
+    jnz     .dch_loop
+    ret
+
+.ich:
+    ret
+
+.dsr:
+    lea     rdx, [csi_args]
+    mov     eax, [rdx]
+    cmp     eax, 6
+    jne     .dsr_ret
+    call    send_cpr
+.dsr_ret:
     ret
 
 .sgr:
@@ -400,6 +626,10 @@ term_handle_csi:
     mov     dword [cur_bg], COLOR_BG
     jmp     .sgr_next
 .not_0:
+    cmp     eax, 38
+    je      .sgr_fg_extended
+    cmp     eax, 48
+    je      .sgr_bg_extended
     cmp     eax, 30
     jb      .not_fg
     cmp     eax, 37
@@ -438,6 +668,78 @@ term_handle_csi:
     lea     rdx, [ansi_colors]
     mov     eax, [rdx + rax*4]
     mov     [cur_bg], eax
+    jmp     .sgr_next
+
+.sgr_fg_extended:
+    inc     ecx
+    cmp     ecx, [csi_argc]
+    jae     .sgr_done
+    lea     rdx, [csi_args]
+    mov     eax, [rdx + rcx*4]
+    cmp     eax, 5
+    je      .fg_256
+    cmp     eax, 2
+    je      .fg_rgb
+    jmp     .sgr_next
+
+.fg_256:
+    inc     ecx
+    cmp     ecx, [csi_argc]
+    jae     .sgr_done
+    lea     rdx, [csi_args]
+    mov     eax, [rdx + rcx*4]
+    call    color_from_256
+    mov     [cur_fg], eax
+    jmp     .sgr_next
+
+.fg_rgb:
+    add     ecx, 3
+    cmp     ecx, [csi_argc]
+    jae     .sgr_done
+    lea     rdx, [csi_args]
+    movzx   eax, byte [rdx + rcx*4 - 8]
+    shl     eax, 8
+    mov     al, [rdx + rcx*4 - 4]
+    shl     eax, 8
+    mov     al, [rdx + rcx*4]
+    mov     [cur_fg], eax
+    jmp     .sgr_next
+
+.sgr_bg_extended:
+    inc     ecx
+    cmp     ecx, [csi_argc]
+    jae     .sgr_done
+    lea     rdx, [csi_args]
+    mov     eax, [rdx + rcx*4]
+    cmp     eax, 5
+    je      .bg_256
+    cmp     eax, 2
+    je      .bg_rgb
+    jmp     .sgr_next
+
+.bg_256:
+    inc     ecx
+    cmp     ecx, [csi_argc]
+    jae     .sgr_done
+    lea     rdx, [csi_args]
+    mov     eax, [rdx + rcx*4]
+    call    color_from_256
+    mov     [cur_bg], eax
+    jmp     .sgr_next
+
+.bg_rgb:
+    add     ecx, 3
+    cmp     ecx, [csi_argc]
+    jae     .sgr_done
+    lea     rdx, [csi_args]
+    movzx   eax, byte [rdx + rcx*4 - 8]
+    shl     eax, 8
+    mov     al, [rdx + rcx*4 - 4]
+    shl     eax, 8
+    mov     al, [rdx + rcx*4]
+    mov     [cur_bg], eax
+    jmp     .sgr_next
+
 .sgr_next:
     inc     ecx
     jmp     .sgr_loop
@@ -478,14 +780,51 @@ term_handle_csi:
     mov     eax, [rdx]
     cmp     eax, 2
     je      .ed_all
+    cmp     eax, 0
+    je      .ed_below
     ret
 .ed_all:
     call    term_clear_grid
     mov     dword [term_cursor_col], 0
     mov     dword [term_cursor_row], 0
     ret
+.ed_below:
+    call    .el
+    mov     eax, [term_cursor_row]
+    inc     eax
+.ed_row_loop:
+    cmp     eax, [term_rows]
+    jae     .ed_done
+    imul    ecx, eax, MAX_COLS
+    shl     ecx, 4
+    lea     rdi, [grid + rcx]
+    push    rax
+    mov     ecx, [term_cols]
+    mov     eax, ' '
+    mov     edx, [cur_fg]
+    mov     r8d, [cur_bg]
+.ed_row_fill:
+    mov     [rdi], eax
+    mov     [rdi + 4], edx
+    mov     [rdi + 8], r8d
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     ecx
+    jnz     .ed_row_fill
+    pop     rax
+    inc     eax
+    jmp     .ed_row_loop
+.ed_done:
+    ret
 
 .el:
+    lea     rdx, [csi_args]
+    mov     eax, [rdx]
+    cmp     eax, 1
+    je      .el_left
+    cmp     eax, 2
+    je      .el_entire
+
     mov     eax, [term_cursor_row]
     imul    eax, MAX_COLS
     add     eax, [term_cursor_col]
@@ -506,6 +845,45 @@ term_handle_csi:
     dec     ecx
     jnz     .el_loop
 .el_done:
+    ret
+
+.el_left:
+    mov     eax, [term_cursor_row]
+    imul    eax, MAX_COLS
+    shl     eax, 4
+    lea     rdi, [grid + rax]
+    mov     ecx, [term_cursor_col]
+    inc     ecx
+    mov     eax, ' '
+    mov     edx, [cur_fg]
+    mov     r8d, [cur_bg]
+.el_left_loop:
+    mov     [rdi], eax
+    mov     [rdi + 4], edx
+    mov     [rdi + 8], r8d
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     ecx
+    jnz     .el_left_loop
+    ret
+
+.el_entire:
+    mov     eax, [term_cursor_row]
+    imul    eax, MAX_COLS
+    shl     eax, 4
+    lea     rdi, [grid + rax]
+    mov     ecx, [term_cols]
+    mov     eax, ' '
+    mov     edx, [cur_fg]
+    mov     r8d, [cur_bg]
+.el_entire_loop:
+    mov     [rdi], eax
+    mov     [rdi + 4], edx
+    mov     [rdi + 8], r8d
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     ecx
+    jnz     .el_entire_loop
     ret
 
 .cuu:
@@ -574,6 +952,122 @@ term_handle_csi:
     mov     [term_cursor_col], ecx
     ret
 
+color_from_256:
+    cmp     eax, 16
+    jae     .not_16
+    lea     rdx, [ansi_colors]
+    mov     eax, [rdx + rax*4]
+    ret
+.not_16:
+    cmp     eax, 232
+    jae     .gray
+    sub     eax, 16
+    xor     edx, edx
+    mov     r8d, 36
+    div     r8d
+    mov     r9d, eax
+    mov     eax, edx
+    xor     edx, edx
+    mov     r8d, 6
+    div     r8d
+    mov     r10d, eax
+    mov     r11d, edx
+
+    call    cube_comp
+    shl     eax, 8
+    push    rax
+    mov     eax, r10d
+    call    cube_comp
+    pop     rdx
+    or      eax, edx
+    shl     eax, 8
+    push    rax
+    mov     eax, r11d
+    call    cube_comp
+    pop     rdx
+    or      eax, edx
+    ret
+
+.gray:
+    sub     eax, 232
+    imul    eax, 10
+    add     eax, 8
+    mov     edx, eax
+    shl     eax, 8
+    or      eax, edx
+    shl     eax, 8
+    or      eax, edx
+    ret
+
+cube_comp:
+    test    eax, eax
+    jz      .cc_ret
+    imul    eax, 40
+    add     eax, 55
+.cc_ret:
+    ret
+
+send_cpr:
+    push    rbx
+    push    r12
+    lea     rdi, [cpr_buf]
+    mov     byte [rdi], 27
+    mov     byte [rdi + 1], '['
+    add     rdi, 2
+
+    mov     eax, [term_cursor_row]
+    inc     eax
+    call    format_u32
+
+    mov     byte [rdi], ';'
+    inc     rdi
+
+    mov     eax, [term_cursor_col]
+    inc     eax
+    call    format_u32
+
+    mov     byte [rdi], 'R'
+    inc     rdi
+
+    lea     rsi, [cpr_buf]
+    mov     rdx, rdi
+    sub     rdx, rsi
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .cpr_ret
+    call    write_all
+.cpr_ret:
+    pop     r12
+    pop     rbx
+    ret
+
+format_u32:
+    push    rdi
+    xor     ecx, ecx
+    mov     ebx, 10
+.f_div:
+    xor     edx, edx
+    div     ebx
+    push    rdx
+    inc     ecx
+    test    eax, eax
+    jnz     .f_div
+    pop     rdx
+    add     dl, '0'
+    mov     [rdi], dl
+    inc     rdi
+    dec     ecx
+    jz      .f_end
+.f_pop:
+    pop     rdx
+    add     dl, '0'
+    mov     [rdi], dl
+    inc     rdi
+    dec     ecx
+    jnz     .f_pop
+.f_end:
+    ret
+
 term_render:
     push    rbx
     push    r12
@@ -636,6 +1130,9 @@ term_render:
     jmp     .row_loop
 
 .draw_cursor:
+    cmp     byte [cursor_visible], 0
+    je      .render_done
+
     mov     eax, [term_cursor_col]
     cmp     eax, [term_cols]
     jae     .render_done
