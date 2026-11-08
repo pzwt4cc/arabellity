@@ -1,4 +1,4 @@
-NAME     := noname
+NAME     := arabellity
 
 SRC_DIR  := src
 BUILD    := build
