@@ -11,6 +11,10 @@ global close_requested
 global win_pty_fd
 global win_envp
 global repeat_timer_fd
+global repeat_delay
+global repeat_rate
+global win_w
+global win_h
 global update_pty_winsize
 
 extern wl_connect
@@ -24,6 +28,10 @@ extern wl_flush_fd
 extern wl_read
 extern streq
 extern write_all
+extern config_load
+extern cfg_pad_x
+extern cfg_pad_y
+extern cfg_scroll_lines
 extern term_init
 extern term_resize
 extern term_render
@@ -118,6 +126,8 @@ win_init:
     mov     dword [id_pointer], 0
     mov     byte [mouse_pressed], 0
     mov     dword [repeat_key], -1
+    mov     rdi, r12
+    call    config_load
     call    term_init
 
     mov     eax, SYS_TIMERFD_CREATE
@@ -250,7 +260,9 @@ win_update:
     js      .fail
 
     mov     eax, [buf_w]
-    sub     eax, PAD_X * 2
+    mov     ecx, [cfg_pad_x]
+    shl     ecx, 1
+    sub     eax, ecx
     jns     .w_pos
     xor     eax, eax
 .w_pos:
@@ -268,7 +280,9 @@ win_update:
     mov     r8d, eax
 
     mov     eax, [buf_h]
-    sub     eax, PAD_Y * 2
+    mov     ecx, [cfg_pad_y]
+    shl     ecx, 1
+    sub     eax, ecx
     jns     .h_pos
     xor     eax, eax
 .h_pos:
@@ -478,7 +492,7 @@ buffer_create:
     mov     edi, [buf_w]
     shl     edi, 2
     call    wl_u32
-    WL_U32  WL_SHM_FORMAT_XRGB8888
+    WL_U32  WL_SHM_FORMAT_ARGB8888
     WL_END
 
     call    wl_new_id
@@ -491,7 +505,7 @@ buffer_create:
     mov     edi, [buf_w]
     shl     edi, 2
     call    wl_u32
-    WL_U32  WL_SHM_FORMAT_XRGB8888
+    WL_U32  WL_SHM_FORMAT_ARGB8888
     WL_END
 
     WL_BEGIN r12d, WL_SHM_POOL_DESTROY
@@ -802,12 +816,12 @@ on_event:
     js      .scroll_up
     jle     .ret
 .scroll_down:
-    mov     edi, 3
+    mov     edi, [cfg_scroll_lines]
     call    term_scroll_view_down
     call    win_redraw
     ret
 .scroll_up:
-    mov     edi, 3
+    mov     edi, [cfg_scroll_lines]
     call    term_scroll_view_up
     call    win_redraw
     ret
@@ -953,7 +967,7 @@ on_event:
 
 coord_to_cell:
     sar     eax, 8
-    sub     eax, PAD_X
+    sub     eax, [cfg_pad_x]
     jns     .x_ok
     xor     eax, eax
 .x_ok:
@@ -973,7 +987,7 @@ coord_to_cell:
 .col_done:
 
     sar     r8d, 8
-    sub     r8d, PAD_Y
+    sub     r8d, [cfg_pad_y]
     jns     .y_ok
     xor     r8d, r8d
 .y_ok:

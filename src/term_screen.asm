@@ -26,6 +26,15 @@ extern font_glyph_data
 extern font_glyph_for_char
 extern write_all
 extern win_pty_fd
+extern cfg_pad_x
+extern cfg_pad_y
+extern cfg_bg
+extern cfg_fg
+extern cfg_cursor
+extern cfg_sel_bg
+extern cfg_sel_fg
+extern cfg_bg_pixel
+extern ansi_colors
 
 %define MAX_COLS       256
 %define MAX_ROWS       128
@@ -102,12 +111,7 @@ alt_grid:           resb MAX_COLS * MAX_ROWS * CELL_SIZE
 scrollback:         resb SCROLLBACK_MAX * MAX_COLS * CELL_SIZE
 empty_line:         resb MAX_COLS * CELL_SIZE
 
-section .rodata
-ansi_colors:
-    dd 0x000000, 0xcd0000, 0x00cd00, 0xcdcd00
-    dd 0x0000ee, 0xcd00cd, 0x00cdcd, 0xe5e5e5
-    dd 0x7f7f7f, 0xff0000, 0x00ff00, 0xffff00
-    dd 0x5c5cff, 0xff00ff, 0x00ffff, 0xffffff
+
 
 section .text
 
@@ -118,8 +122,10 @@ term_init:
     mov     dword [term_cursor_row], 0
     mov     dword [saved_cursor_col], 0
     mov     dword [saved_cursor_row], 0
-    mov     dword [cur_fg], COLOR_FG
-    mov     dword [cur_bg], COLOR_BG
+    mov     eax, [cfg_fg]
+    mov     [cur_fg], eax
+    mov     eax, [cfg_bg]
+    mov     [cur_bg], eax
     mov     dword [esc_state], 0
     mov     dword [utf8_state], 0
     mov     byte [cursor_visible], 1
@@ -487,8 +493,10 @@ term_resize:
     sub     edx, ecx
 .tui_c_loop:
     mov     dword [rdi], ' '
-    mov     dword [rdi + 4], COLOR_FG
-    mov     dword [rdi + 8], COLOR_BG
+    mov     eax, [cfg_fg]
+    mov     [rdi + 4], eax
+    mov     eax, [cfg_bg]
+    mov     [rdi + 8], eax
     mov     dword [rdi + 12], 0
     add     rdi, CELL_SIZE
     dec     edx
@@ -500,8 +508,10 @@ term_resize:
     mov     edx, MAX_COLS
 .tui_f_loop:
     mov     dword [rdi], ' '
-    mov     dword [rdi + 4], COLOR_FG
-    mov     dword [rdi + 8], COLOR_BG
+    mov     eax, [cfg_fg]
+    mov     [rdi + 4], eax
+    mov     eax, [cfg_bg]
+    mov     [rdi + 8], eax
     mov     dword [rdi + 12], 0
     add     rdi, CELL_SIZE
     dec     edx
@@ -1180,7 +1190,8 @@ get_logical_row_len:
 .scan_len:
     mov     eax, ecx
     shl     eax, 4
-    cmp     dword [rsi + rax + 8], COLOR_BG
+    mov     edx, [cfg_bg]
+    cmp     dword [rsi + rax + 8], edx
     jne     .found_len
     mov     edx, [rsi + rax]
     cmp     edx, ' '
@@ -1808,8 +1819,10 @@ term_handle_csi:
     mov     eax, [rdx + rcx*4]
     test    eax, eax
     jnz     .not_0
-    mov     dword [cur_fg], COLOR_FG
-    mov     dword [cur_bg], COLOR_BG
+    mov     eax, [cfg_fg]
+    mov     [cur_fg], eax
+    mov     eax, [cfg_bg]
+    mov     [cur_bg], eax
     jmp     .sgr_next
 .not_0:
     cmp     eax, 8
@@ -1820,7 +1833,8 @@ term_handle_csi:
 .not_conceal:
     cmp     eax, 28
     jne     .not_reveal
-    mov     dword [cur_fg], COLOR_FG
+    mov     eax, [cfg_fg]
+    mov     [cur_fg], eax
     jmp     .sgr_next
 .not_reveal:
     cmp     eax, 39
@@ -1872,11 +1886,13 @@ term_handle_csi:
     jmp     .sgr_next
 
 .sgr_fg_default:
-    mov     dword [cur_fg], COLOR_FG
+    mov     eax, [cfg_fg]
+    mov     [cur_fg], eax
     jmp     .sgr_next
 
 .sgr_bg_default:
-    mov     dword [cur_bg], COLOR_BG
+    mov     eax, [cfg_bg]
+    mov     [cur_bg], eax
     jmp     .sgr_next
 
 .sgr_fg_extended:
@@ -2408,7 +2424,7 @@ term_render:
     mov     rdi, r12
     mov     ecx, r13d
     imul    ecx, r14d
-    mov     eax, COLOR_BG
+    mov     eax, [cfg_bg_pixel]
     rep     stosd
 
     call    build_vis_rows
@@ -2446,14 +2462,22 @@ term_render:
     pop     r8
     pop     rdi
     jz      .not_sel
-    mov     r8d, COLOR_SEL_FG
-    mov     r9d, COLOR_SEL_BG
+    mov     r8d, [cfg_sel_fg]
+    mov     r9d, [cfg_sel_bg]
 .not_sel:
     cmp     edi, ' '
     je      .space_cell
     test    edi, edi
     jz      .space_cell
 
+    or      r8d, 0xff000000
+    cmp     r9d, [cfg_bg]
+    jne     .non_def_bg
+    mov     r9d, [cfg_bg_pixel]
+    jmp     .bg_ready
+.non_def_bg:
+    or      r9d, 0xff000000
+.bg_ready:
     push    r8
     push    r9
     call    font_glyph_for_char
@@ -2464,9 +2488,9 @@ term_render:
     mov     rsi, rax
 
     imul    eax, ebp, FONT_W
-    add     eax, PAD_X
+    add     eax, [cfg_pad_x]
     imul    ecx, r15d, FONT_H
-    add     ecx, PAD_Y
+    add     ecx, [cfg_pad_y]
 
     mov     rdi, r12
     mov     edx, r13d
@@ -2477,17 +2501,18 @@ term_render:
     jmp     .col_loop
 
 .space_cell:
-    cmp     r9d, COLOR_BG
+    cmp     r9d, [cfg_bg]
     je      .col_next
     imul    eax, ebp, FONT_W
-    add     eax, PAD_X
+    add     eax, [cfg_pad_x]
     imul    ecx, r15d, FONT_H
-    add     ecx, PAD_Y
+    add     ecx, [cfg_pad_y]
     imul    ecx, r13d
     add     ecx, eax
     lea     rdi, [r12 + rcx*4]
     mov     edx, FONT_H
     mov     eax, r9d
+    or      eax, 0xff000000
 .sp_row:
     mov     rsi, rdi
     mov     ecx, FONT_W
@@ -2514,16 +2539,17 @@ term_render:
     jae     .render_done
 
     imul    eax, FONT_W
-    add     eax, PAD_X
+    add     eax, [cfg_pad_x]
     imul    ecx, FONT_H
-    add     ecx, PAD_Y
+    add     ecx, [cfg_pad_y]
 
     imul    ecx, r13d
     add     ecx, eax
     lea     rdi, [r12 + rcx*4]
 
     mov     edx, FONT_H
-    mov     eax, COLOR_CURSOR
+    mov     eax, [cfg_cursor]
+    or      eax, 0xff000000
 .c_row:
     mov     rsi, rdi
     mov     ecx, FONT_W

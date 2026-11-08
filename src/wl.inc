@@ -14,6 +14,7 @@
 %define WL_SHM_CREATE_POOL              0
 %define WL_SHM_POOL_CREATE_BUFFER       0
 %define WL_SHM_POOL_DESTROY             1
+%define WL_SHM_FORMAT_ARGB8888          0
 %define WL_SHM_FORMAT_XRGB8888          1
 
 %define WL_BUFFER_DESTROY               0
