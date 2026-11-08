@@ -9,9 +9,11 @@ extern find_shell
 extern win_init
 extern win_update
 extern win_redraw
+extern win_handle_repeat
 extern update_pty_winsize
 extern wl_read
 extern wl_fd
+extern repeat_timer_fd
 extern close_requested
 extern win_pty_fd
 extern term_feed
@@ -22,7 +24,7 @@ err_window_len  equ $ - err_window
 
 section .bss
 buf:            resb BUF_SIZE
-pfds:           resb 16
+pfds:           resb 24
 status:         resd 1
 
 section .text
@@ -74,10 +76,14 @@ _start:
     mov     dword [pfds + 8], eax
     mov     word [pfds + 12], POLLIN
     mov     word [pfds + 14], 0
+    mov     eax, [repeat_timer_fd]
+    mov     dword [pfds + 16], eax
+    mov     word [pfds + 20], POLLIN
+    mov     word [pfds + 22], 0
 
     mov     eax, SYS_POLL
     lea     rdi, [pfds]
-    mov     esi, 2
+    mov     esi, 3
     mov     edx, -1
     syscall
     cmp     rax, -EINTR
@@ -103,11 +109,16 @@ _start:
 
 .wl:
     test    word [pfds + 14], POLLIN | POLLHUP | POLLERR
-    jz      .loop
+    jz      .timer
     call    wl_read
     test    rax, rax
     jle     .closed
     call    win_update
+
+.timer:
+    test    word [pfds + 22], POLLIN
+    jz      .loop
+    call    win_handle_repeat
     jmp     .loop
 
 .done:

@@ -3,6 +3,7 @@ default rel
 
 global kbd_handle_key
 global kbd_handle_modifiers
+global kbd_is_modifier
 global kbd_input_buf
 global kbd_input_len
 global kbd_action
@@ -74,6 +75,7 @@ extern write_all
 %define KEY_KPASTERISK  55
 %define KEY_LEFTALT     56
 %define KEY_SPACE       57
+%define KEY_CAPSLOCK    58
 %define KEY_F1          59
 %define KEY_F2          60
 %define KEY_F3          61
@@ -84,6 +86,8 @@ extern write_all
 %define KEY_F8          66
 %define KEY_F9          67
 %define KEY_F10         68
+%define KEY_NUMLOCK     69
+%define KEY_SCROLLLOCK  70
 %define KEY_KP7         71
 %define KEY_KP8         72
 %define KEY_KP9         73
@@ -100,7 +104,9 @@ extern write_all
 %define KEY_F11         87
 %define KEY_F12         88
 %define KEY_KPENTER     96
+%define KEY_RIGHTCTRL   97
 %define KEY_KPSLASH     98
+%define KEY_RIGHTALT    100
 %define KEY_HOME        102
 %define KEY_UP          103
 %define KEY_PAGEUP      104
@@ -111,6 +117,8 @@ extern write_all
 %define KEY_PAGEDOWN    109
 %define KEY_INSERT      110
 %define KEY_DELETE      111
+%define KEY_LEFTMETA    125
+%define KEY_RIGHTMETA   126
 
 section .bss
 kbd_input_buf:      resb 64
@@ -184,6 +192,35 @@ wl_paste_path:  db "/usr/bin/wl-paste", 0
 wl_paste_arg1:  db "-n", 0
 
 section .text
+
+kbd_is_modifier:
+    cmp     edi, KEY_LEFTCTRL
+    je      .yes
+    cmp     edi, KEY_RIGHTCTRL
+    je      .yes
+    cmp     edi, KEY_LEFTSHIFT
+    je      .yes
+    cmp     edi, KEY_RIGHTSHIFT
+    je      .yes
+    cmp     edi, KEY_LEFTALT
+    je      .yes
+    cmp     edi, KEY_RIGHTALT
+    je      .yes
+    cmp     edi, KEY_CAPSLOCK
+    je      .yes
+    cmp     edi, KEY_NUMLOCK
+    je      .yes
+    cmp     edi, KEY_SCROLLLOCK
+    je      .yes
+    cmp     edi, KEY_LEFTMETA
+    je      .yes
+    cmp     edi, KEY_RIGHTMETA
+    je      .yes
+    xor     eax, eax
+    ret
+.yes:
+    mov     eax, 1
+    ret
 
 kbd_handle_modifiers:
     mov     [mod_depressed], edi

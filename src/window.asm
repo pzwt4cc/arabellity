@@ -5,10 +5,12 @@ default rel
 global win_init
 global win_update
 global win_redraw
+global win_handle_repeat
 global on_event
 global close_requested
 global win_pty_fd
 global win_envp
+global repeat_timer_fd
 global update_pty_winsize
 
 extern wl_connect
@@ -40,6 +42,7 @@ extern term_sel_end_col
 extern term_sel_end_row
 extern kbd_handle_key
 extern kbd_handle_modifiers
+extern kbd_is_modifier
 extern kbd_input_buf
 extern kbd_input_len
 extern kbd_action
@@ -68,6 +71,10 @@ win_w:          dd DEFAULT_W
 win_h:          dd DEFAULT_H
 win_pty_fd:     dd -1
 win_envp:       dq 0
+repeat_timer_fd: dd -1
+repeat_rate:    dd 35
+repeat_delay:   dd 280
+repeat_key:     dd -1
 
 section .bss
 id_registry:        resd 1
@@ -94,6 +101,8 @@ sync_done:          resb 1
 configure_pending:  resb 1
 close_requested:    resb 1
 winsize_struct:     resw 4
+itimerspec:         resq 4
+timer_exp:          resq 1
 
 section .text
 
@@ -104,7 +113,17 @@ win_init:
     mov     [win_envp], rdi
     mov     dword [id_pointer], 0
     mov     byte [mouse_pressed], 0
+    mov     dword [repeat_key], -1
     call    term_init
+
+    mov     eax, SYS_TIMERFD_CREATE
+    mov     edi, CLOCK_MONOTONIC
+    mov     esi, TFD_CLOEXEC | TFD_NONBLOCK
+    syscall
+    test    rax, rax
+    js      .no_timer
+    mov     [repeat_timer_fd], eax
+.no_timer:
 
     mov     rdi, r12
     call    wl_connect
@@ -391,6 +410,107 @@ buffer_create:
     mov     rax, -1
     jmp     .ret
 
+arm_repeat_timer:
+    mov     edi, [repeat_timer_fd]
+    test    edi, edi
+    js      .ret
+    mov     eax, [repeat_rate]
+    test    eax, eax
+    jle     .disarm
+
+    mov     ecx, eax
+    mov     eax, 1000000000
+    xor     edx, edx
+    div     ecx
+    xor     ecx, ecx
+    cmp     eax, 1000000000
+    jb      .int_ok
+    mov     ecx, 1
+    xor     eax, eax
+.int_ok:
+    mov     [itimerspec], rcx
+    mov     [itimerspec + 8], rax
+
+    mov     eax, [repeat_delay]
+    test    eax, eax
+    jle     .disarm
+    xor     edx, edx
+    mov     ecx, 1000
+    div     ecx
+    mov     [itimerspec + 16], rax
+    imul    edx, 1000000
+    mov     [itimerspec + 24], rdx
+
+    mov     eax, SYS_TIMERFD_SETTIME
+    mov     edi, [repeat_timer_fd]
+    xor     esi, esi
+    lea     rdx, [itimerspec]
+    xor     r10d, r10d
+    syscall
+.ret:
+    ret
+.disarm:
+    jmp     disarm_repeat_timer
+
+disarm_repeat_timer:
+    mov     dword [repeat_key], -1
+    mov     edi, [repeat_timer_fd]
+    test    edi, edi
+    js      .ret
+    xor     eax, eax
+    mov     [itimerspec], rax
+    mov     [itimerspec + 8], rax
+    mov     [itimerspec + 16], rax
+    mov     [itimerspec + 24], rax
+    mov     eax, SYS_TIMERFD_SETTIME
+    xor     esi, esi
+    lea     rdx, [itimerspec]
+    xor     r10d, r10d
+    syscall
+.ret:
+    ret
+
+win_handle_repeat:
+    mov     edi, [repeat_timer_fd]
+    test    edi, edi
+    js      .ret
+    mov     eax, SYS_READ
+    lea     rsi, [timer_exp]
+    mov     edx, 8
+    syscall
+    test    rax, rax
+    jle     .ret
+
+    mov     edi, [repeat_key]
+    test    edi, edi
+    js      .ret
+    mov     esi, 1
+    call    process_key_dispatch
+.ret:
+    ret
+
+process_key_dispatch:
+    call    kbd_handle_key
+
+    cmp     dword [kbd_action], 0
+    je      .check_kbd_input
+    call    win_redraw
+    ret
+
+.check_kbd_input:
+    mov     edx, [kbd_input_len]
+    test    edx, edx
+    jz      .ret
+    call    term_scroll_view_to_bottom
+    mov     edx, [kbd_input_len]
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .ret
+    lea     rsi, [kbd_input_buf]
+    call    write_all
+.ret:
+    ret
+
 on_event:
     cmp     edi, WL_DISPLAY_ID
     je      .display
@@ -508,30 +628,48 @@ on_event:
     je      .kbd_key
     cmp     esi, WL_KEYBOARD_MODIFIERS
     je      .kbd_mod
+    cmp     esi, WL_KEYBOARD_REPEAT_INFO
+    je      .kbd_repeat_info
+    cmp     esi, WL_KEYBOARD_LEAVE
+    je      .kbd_leave
     ret
+
+.kbd_repeat_info:
+    mov     eax, [rdx]
+    mov     [repeat_rate], eax
+    mov     eax, [rdx + 4]
+    mov     [repeat_delay], eax
+    ret
+
+.kbd_leave:
+    jmp     disarm_repeat_timer
 
 .kbd_key:
     mov     edi, [rdx + 8]
     mov     esi, [rdx + 12]
-    call    kbd_handle_key
+    test    esi, esi
+    jz      .key_released
 
-    cmp     dword [kbd_action], 0
-    je      .check_kbd_input
-    call    win_redraw
-    ret
+    push    rdi
+    push    rsi
+    call    kbd_is_modifier
+    pop     rsi
+    pop     rdi
+    test    eax, eax
+    jnz     .no_arm
+    mov     [repeat_key], edi
+    push    rdi
+    push    rsi
+    call    arm_repeat_timer
+    pop     rsi
+    pop     rdi
+.no_arm:
+    jmp     process_key_dispatch
 
-.check_kbd_input:
-    mov     edx, [kbd_input_len]
-    test    edx, edx
-    jz      .ret
-    call    term_scroll_view_to_bottom
-    mov     edx, [kbd_input_len]
-    mov     edi, [win_pty_fd]
-    test    edi, edi
-    js      .ret
-    lea     rsi, [kbd_input_buf]
-    call    write_all
-    ret
+.key_released:
+    cmp     edi, [repeat_key]
+    jne     .ret
+    jmp     disarm_repeat_timer
 
 .kbd_mod:
     mov     edi, [rdx + 4]
