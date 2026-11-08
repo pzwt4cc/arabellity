@@ -79,9 +79,14 @@ cursor_visible:     resb 1
 auto_wrap:          resb 1
 wrap_next:          resb 1
 saved_wrap_next:    resb 1
+in_alt_screen:      resb 1
+alt_wrap_next:      resb 1
+alt_cursor_col:     resd 1
+alt_cursor_row:     resd 1
 cpr_buf:            resb 32
 
 row_wrapped:        resb MAX_ROWS
+alt_row_wrapped:    resb MAX_ROWS
 vis_row_ptrs:       resq MAX_ROWS
 vis_row_cols:       resd MAX_ROWS
 vis_cursor_row:     resd 1
@@ -93,6 +98,7 @@ clip_len:           resd 1
 clip_buf:           resb CLIP_MAX
 
 grid:               resb MAX_COLS * MAX_ROWS * CELL_SIZE
+alt_grid:           resb MAX_COLS * MAX_ROWS * CELL_SIZE
 scrollback:         resb SCROLLBACK_MAX * MAX_COLS * CELL_SIZE
 empty_line:         resb MAX_COLS * CELL_SIZE
 
@@ -120,6 +126,7 @@ term_init:
     mov     byte [auto_wrap], 1
     mov     byte [wrap_next], 0
     mov     byte [saved_wrap_next], 0
+    mov     byte [in_alt_screen], 0
     mov     byte [term_has_sel], 0
     mov     dword [scrollback_count], 0
     mov     dword [scrollback_head], 0
@@ -555,6 +562,12 @@ term_process_char:
     je      .state_dcs
     cmp     edx, 6
     je      .state_dcs_esc
+    cmp     edx, 7
+    je      .state_charset
+    ret
+
+.state_charset:
+    mov     dword [esc_state], 0
     ret
 
 .state_ground:
@@ -605,7 +618,21 @@ term_process_char:
     je      .index_down
     cmp     edi, 'E'
     je      .next_line
+    cmp     edi, '('
+    je      .to_charset
+    cmp     edi, ')'
+    je      .to_charset
+    cmp     edi, '*'
+    je      .to_charset
+    cmp     edi, '+'
+    je      .to_charset
+    cmp     edi, '#'
+    je      .to_charset
     mov     dword [esc_state], 0
+    ret
+
+.to_charset:
+    mov     dword [esc_state], 7
     ret
 
 .index_down:
@@ -850,6 +877,9 @@ term_scroll_up:
     push    rbx
     push    rsi
     push    rdi
+
+    cmp     byte [in_alt_screen], 0
+    jne     .sb_c_ok
 
     mov     eax, [scrollback_head]
     imul    eax, MAX_COLS * CELL_SIZE
@@ -1141,6 +1171,13 @@ build_vis_rows:
     mov     r12d, 1
 .w_valid:
     xor     r13d, r13d
+    xor     ebp, ebp
+
+    cmp     byte [in_alt_screen], 0
+    jne     .alt_vis_fast
+
+    cmp     dword [scroll_offset], 0
+    je      .sb_done
 
     xor     ebx, ebx
 .sb_loop:
@@ -1222,7 +1259,12 @@ build_vis_rows:
     mov     ecx, r13d
     sub     ecx, [term_rows]
 .start_vis_ok:
-    mov     [max_scroll_offset], ecx
+    mov     edx, ecx
+    cmp     dword [scroll_offset], 0
+    jne     .Store_max_sc
+    add     edx, [scrollback_count]
+.Store_max_sc:
+    mov     [max_scroll_offset], edx
     mov     edx, [scroll_offset]
     cmp     edx, ecx
     jbe     .scroll_ok
@@ -1250,6 +1292,26 @@ build_vis_rows:
     mov     [vis_row_cols + rdi*4], r8d
     inc     edi
     jmp     .fill_vis_loop
+
+    jmp     .vis_done
+
+.alt_vis_fast:
+    mov     dword [max_scroll_offset], 0
+    mov     dword [scroll_offset], 0
+    mov     eax, [term_cursor_row]
+    mov     [vis_cursor_row], eax
+    mov     eax, [term_cursor_col]
+    mov     [vis_cursor_col], eax
+    xor     edi, edi
+.alt_fill_loop:
+    cmp     edi, [term_rows]
+    jae     .vis_done
+    imul    eax, edi, MAX_COLS * CELL_SIZE
+    lea     rdx, [grid + rax]
+    mov     [vis_row_ptrs + rdi*8], rdx
+    mov     [vis_row_cols + rdi*4], r12d
+    inc     edi
+    jmp     .alt_fill_loop
 
 .vis_done:
     pop     rbp
@@ -1341,12 +1403,23 @@ term_handle_csi:
     je      .ps_wrap
     cmp     eax, 25
     je      .ps_cursor
+    cmp     eax, 1049
+    je      .ps_alt
+    cmp     eax, 47
+    je      .ps_alt
+    cmp     eax, 1047
+    je      .ps_alt
     jmp     .ps_next
 .ps_wrap:
     mov     byte [auto_wrap], 1
     jmp     .ps_next
 .ps_cursor:
     mov     byte [cursor_visible], 1
+    jmp     .ps_next
+.ps_alt:
+    push    rcx
+    call    .enter_alt_screen
+    pop     rcx
 .ps_next:
     inc     ecx
     jmp     .ps_loop
@@ -1364,6 +1437,12 @@ term_handle_csi:
     je      .pr_wrap
     cmp     eax, 25
     je      .pr_cursor
+    cmp     eax, 1049
+    je      .pr_alt
+    cmp     eax, 47
+    je      .pr_alt
+    cmp     eax, 1047
+    je      .pr_alt
     jmp     .pr_next
 .pr_wrap:
     mov     byte [auto_wrap], 0
@@ -1371,9 +1450,69 @@ term_handle_csi:
     jmp     .pr_next
 .pr_cursor:
     mov     byte [cursor_visible], 0
+    jmp     .pr_next
+.pr_alt:
+    push    rcx
+    call    .leave_alt_screen
+    pop     rcx
 .pr_next:
     inc     ecx
     jmp     .pr_loop
+
+.enter_alt_screen:
+    cmp     byte [in_alt_screen], 0
+    jne     .alt_ret
+    mov     byte [in_alt_screen], 1
+    mov     eax, [term_cursor_col]
+    mov     [alt_cursor_col], eax
+    mov     eax, [term_cursor_row]
+    mov     [alt_cursor_row], eax
+    mov     al, [wrap_next]
+    mov     [alt_wrap_next], al
+    mov     dword [scroll_offset], 0
+    push    rsi
+    push    rdi
+    lea     rdi, [alt_grid]
+    lea     rsi, [grid]
+    mov     ecx, MAX_COLS * MAX_ROWS * (CELL_SIZE / 4)
+    rep     movsd
+    lea     rdi, [alt_row_wrapped]
+    lea     rsi, [row_wrapped]
+    mov     ecx, MAX_ROWS
+    rep     movsb
+    call    term_clear_grid
+    mov     dword [term_cursor_col], 0
+    mov     dword [term_cursor_row], 0
+    mov     byte [wrap_next], 0
+    pop     rdi
+    pop     rsi
+.alt_ret:
+    ret
+
+.leave_alt_screen:
+    cmp     byte [in_alt_screen], 0
+    je      .alt_ret
+    mov     byte [in_alt_screen], 0
+    mov     dword [scroll_offset], 0
+    push    rsi
+    push    rdi
+    lea     rdi, [grid]
+    lea     rsi, [alt_grid]
+    mov     ecx, MAX_COLS * MAX_ROWS * (CELL_SIZE / 4)
+    rep     movsd
+    lea     rdi, [row_wrapped]
+    lea     rsi, [alt_row_wrapped]
+    mov     ecx, MAX_ROWS
+    rep     movsb
+    mov     eax, [alt_cursor_col]
+    mov     [term_cursor_col], eax
+    mov     eax, [alt_cursor_row]
+    mov     [term_cursor_row], eax
+    mov     al, [alt_wrap_next]
+    mov     [wrap_next], al
+    pop     rdi
+    pop     rsi
+    ret
 
 .save_cursor_csi:
     mov     eax, [term_cursor_col]
@@ -2222,6 +2361,11 @@ term_render:
     mov     r8d, COLOR_SEL_FG
     mov     r9d, COLOR_SEL_BG
 .not_sel:
+    cmp     edi, ' '
+    je      .space_cell
+    test    edi, edi
+    jz      .space_cell
+
     push    r8
     push    r9
     call    font_glyph_for_char
@@ -2240,8 +2384,30 @@ term_render:
     mov     edx, r13d
     call    draw_glyph
 
+.col_next:
     inc     ebp
     jmp     .col_loop
+
+.space_cell:
+    cmp     r9d, COLOR_BG
+    je      .col_next
+    imul    eax, ebp, FONT_W
+    add     eax, PAD_X
+    imul    ecx, r15d, FONT_H
+    add     ecx, PAD_Y
+    imul    ecx, r13d
+    add     ecx, eax
+    lea     rdi, [r12 + rcx*4]
+    mov     edx, FONT_H
+    mov     eax, r9d
+.sp_row:
+    mov     rsi, rdi
+    mov     ecx, FONT_W
+    rep     stosd
+    lea     rdi, [rsi + r13*4]
+    dec     edx
+    jnz     .sp_row
+    jmp     .col_next
 .row_next:
     inc     r15d
     jmp     .row_loop

@@ -93,11 +93,14 @@ id_surface:         resd 1
 id_xdg_surface:     resd 1
 id_toplevel:        resd 1
 id_buffer:          resd 1
+id_buffer2:         resd 1
 configure_serial:   resd 1
 buf_w:              resd 1
 buf_h:              resd 1
 buf_ptr:            resq 1
+frame_size:         resq 1
 buf_size:           resq 1
+cur_buf:            resb 1
 sync_done:          resb 1
 configure_pending:  resb 1
 close_requested:    resb 1
@@ -367,14 +370,25 @@ update_pty_winsize:
 win_redraw:
     cmp     qword [buf_ptr], 0
     je      .ret
+    push    rbx
 
     mov     rdi, [buf_ptr]
+    mov     ebx, [id_buffer]
+    cmp     byte [cur_buf], 0
+    je      .buf0
+    add     rdi, [frame_size]
+    mov     ebx, [id_buffer2]
+    mov     byte [cur_buf], 0
+    jmp     .do_render
+.buf0:
+    mov     byte [cur_buf], 1
+.do_render:
     mov     esi, [buf_w]
     mov     edx, [buf_h]
     call    term_render
 
     WL_BEGIN [id_surface], WL_SURFACE_ATTACH
-    WL_U32  [id_buffer]
+    WL_U32  ebx
     WL_U32  0
     WL_U32  0
     WL_END
@@ -389,6 +403,7 @@ win_redraw:
     WL_BEGIN [id_surface], WL_SURFACE_COMMIT
     WL_END
     call    wl_flush
+    pop     rbx
 .ret:
     ret
 
@@ -399,17 +414,22 @@ buffer_create:
     je      .new
     WL_BEGIN [id_buffer], WL_BUFFER_DESTROY
     WL_END
+    WL_BEGIN [id_buffer2], WL_BUFFER_DESTROY
+    WL_END
     mov     eax, SYS_MUNMAP
     mov     rdi, [buf_ptr]
     mov     rsi, [buf_size]
     syscall
 .new:
+    mov     byte [cur_buf], 0
     mov     eax, [win_w]
     mov     [buf_w], eax
     mov     ecx, [win_h]
     mov     [buf_h], ecx
     shl     eax, 2
     imul    rax, rcx
+    mov     [frame_size], rax
+    shl     rax, 1
     mov     [buf_size], rax
 
     mov     eax, SYS_MEMFD_CREATE
@@ -453,6 +473,19 @@ buffer_create:
     WL_BEGIN r12d, WL_SHM_POOL_CREATE_BUFFER
     WL_U32  [id_buffer]
     WL_U32  0
+    WL_U32  [buf_w]
+    WL_U32  [buf_h]
+    mov     edi, [buf_w]
+    shl     edi, 2
+    call    wl_u32
+    WL_U32  WL_SHM_FORMAT_XRGB8888
+    WL_END
+
+    call    wl_new_id
+    mov     [id_buffer2], eax
+    WL_BEGIN r12d, WL_SHM_POOL_CREATE_BUFFER
+    WL_U32  [id_buffer2]
+    WL_U32  [frame_size]
     WL_U32  [buf_w]
     WL_U32  [buf_h]
     mov     edi, [buf_w]

@@ -1,7 +1,7 @@
 default rel
 %include "syscalls.inc"
 
-%define BUF_SIZE   4096
+%define BUF_SIZE   65536
 
 extern pty_open
 extern pty_spawn
@@ -105,6 +105,35 @@ _start:
     lea     rdi, [buf]
     mov     rsi, rax
     call    term_feed
+
+    mov     ebp, 16
+.coalesce_pty:
+    mov     dword [pfds], ebx
+    mov     word [pfds + 4], POLLIN
+    mov     word [pfds + 6], 0
+    mov     eax, SYS_POLL
+    lea     rdi, [pfds]
+    mov     esi, 1
+    mov     edx, 1
+    syscall
+    test    rax, rax
+    jle     .pty_redraw
+    test    word [pfds + 6], POLLIN
+    jz      .pty_redraw
+    mov     eax, SYS_READ
+    mov     edi, ebx
+    lea     rsi, [buf]
+    mov     edx, BUF_SIZE
+    syscall
+    test    rax, rax
+    jle     .pty_redraw
+    lea     rdi, [buf]
+    mov     rsi, rax
+    call    term_feed
+    dec     ebp
+    jnz     .coalesce_pty
+
+.pty_redraw:
     call    win_redraw
 
 .wl:
