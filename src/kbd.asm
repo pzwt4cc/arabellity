@@ -290,10 +290,16 @@ kbd_handle_key:
     je      .send_ctrl_down
     cmp     edi, KEY_BACKSPACE
     je      .send_ctrl_bs
+    cmp     edi, KEY_EQUAL
+    je      .do_zoom_in
     cmp     edi, KEY_KPPLUS
     je      .do_zoom_in
+    cmp     edi, KEY_MINUS
+    je      .do_zoom_out
     cmp     edi, KEY_KPMINUS
     je      .do_zoom_out
+    cmp     edi, KEY_0
+    je      .do_zoom_reset
     cmp     edi, KEY_KP0
     je      .do_zoom_reset
 .not_ctrl_special:

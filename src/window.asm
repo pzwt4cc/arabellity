@@ -1220,7 +1220,7 @@ set_cursor_shape:
     mov     [cur_cursor_shape], edi
     WL_BEGIN [id_cursor_shape_device], 1
     WL_U32  [pointer_enter_serial]
-    WL_U32  edi
+    WL_U32  [cur_cursor_shape]
     WL_END
     call    wl_flush
 .ret:
