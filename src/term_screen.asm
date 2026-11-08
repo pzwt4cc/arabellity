@@ -419,6 +419,11 @@ term_resize:
     mov     r12d, edi
     mov     r13d, esi
 
+    cmp     byte [in_alt_screen], 0
+    jne     .tui_resize
+    cmp     byte [cursor_visible], 0
+    je      .tui_resize
+
     cmp     r13d, [term_rows]
     jbe     .check_v_shrink
     mov     ebx, r13d
@@ -461,6 +466,50 @@ term_resize:
     inc     dword [shrink_scrolled]
     dec     ebx
     jmp     .shrink_scroll_loop
+
+    jmp     .rows_fit
+
+.tui_resize:
+    xor     ebx, ebx
+.tui_r_loop:
+    cmp     ebx, MAX_ROWS
+    jae     .rows_fit
+    cmp     ebx, r13d
+    jae     .tui_clear_full_row
+    mov     ecx, r12d
+    cmp     ecx, MAX_COLS
+    jae     .tui_r_next
+    imul    eax, ebx, MAX_COLS
+    add     eax, ecx
+    shl     eax, 4
+    lea     rdi, [grid + rax]
+    mov     edx, MAX_COLS
+    sub     edx, ecx
+.tui_c_loop:
+    mov     dword [rdi], ' '
+    mov     dword [rdi + 4], COLOR_FG
+    mov     dword [rdi + 8], COLOR_BG
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     edx
+    jnz     .tui_c_loop
+    jmp     .tui_r_next
+.tui_clear_full_row:
+    imul    eax, ebx, MAX_COLS * CELL_SIZE
+    lea     rdi, [grid + rax]
+    mov     edx, MAX_COLS
+.tui_f_loop:
+    mov     dword [rdi], ' '
+    mov     dword [rdi + 4], COLOR_FG
+    mov     dword [rdi + 8], COLOR_BG
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     edx
+    jnz     .tui_f_loop
+.tui_r_next:
+    mov     byte [row_wrapped + rbx], 0
+    inc     ebx
+    jmp     .tui_r_loop
 
 .rows_fit:
     mov     [term_cols], r12d
@@ -682,8 +731,12 @@ term_process_char:
     mov     dword [esc_state], 2
     mov     dword [csi_argc], 0
     mov     byte [csi_private], 0
-    lea     rax, [csi_args]
-    mov     dword [rax], 0
+    push    rdi
+    lea     rdi, [csi_args]
+    xor     eax, eax
+    mov     ecx, 16
+    rep     stosd
+    pop     rdi
     ret
 
 .to_osc:
@@ -729,11 +782,18 @@ term_process_char:
 
 .state_csi:
     cmp     edi, '?'
-    jne     .csi_not_priv
+    jne     .csi_not_qmark
     mov     byte [csi_private], 1
     ret
+.csi_not_qmark:
+    cmp     edi, '<'
+    jb      .csi_check_digit
+    cmp     edi, '>'
+    ja      .csi_check_digit
+    mov     byte [csi_private], 2
+    ret
 
-.csi_not_priv:
+.csi_check_digit:
     cmp     edi, '0'
     jb      .csi_not_digit
     cmp     edi, '9'
@@ -751,14 +811,25 @@ term_process_char:
 .csi_not_digit:
     cmp     edi, ';'
     je      .csi_sep
-    cmp     edi, '$'
-    je      .ret
+    cmp     edi, ':'
+    je      .csi_sep
+    cmp     edi, 0x20
+    jb      .csi_abort
+    cmp     edi, 0x2F
+    jbe     .ret
+    cmp     edi, 0x40
+    jb      .ret
+    cmp     edi, 0x7E
+    ja      .csi_abort
+    cmp     byte [csi_private], 2
+    je      .csi_abort
     push    rdi
     mov     eax, [csi_argc]
     inc     eax
     mov     [csi_argc], eax
     pop     rdi
     call    term_handle_csi
+.csi_abort:
     mov     dword [esc_state], 0
     ret
 
@@ -868,6 +939,10 @@ term_process_char:
 
 .at_right_margin:
     cmp     byte [auto_wrap], 0
+    je      .ret
+    cmp     byte [in_alt_screen], 0
+    jne     .ret
+    cmp     byte [cursor_visible], 0
     je      .ret
     mov     byte [wrap_next], 1
 .ret:
@@ -1175,6 +1250,8 @@ build_vis_rows:
 
     cmp     byte [in_alt_screen], 0
     jne     .alt_vis_fast
+    cmp     byte [cursor_visible], 0
+    je      .alt_vis_fast
 
     cmp     dword [scroll_offset], 0
     je      .sb_done
@@ -1735,6 +1812,17 @@ term_handle_csi:
     mov     dword [cur_bg], COLOR_BG
     jmp     .sgr_next
 .not_0:
+    cmp     eax, 8
+    jne     .not_conceal
+    mov     eax, [cur_bg]
+    mov     [cur_fg], eax
+    jmp     .sgr_next
+.not_conceal:
+    cmp     eax, 28
+    jne     .not_reveal
+    mov     dword [cur_fg], COLOR_FG
+    jmp     .sgr_next
+.not_reveal:
     cmp     eax, 39
     je      .sgr_fg_default
     cmp     eax, 49
