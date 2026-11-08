@@ -54,6 +54,13 @@ extern kbd_handle_modifiers
 extern kbd_get_modifiers
 extern term_find_url_at
 extern term_clear_sel
+extern term_clear_hover
+extern url_hover_active
+extern font_w
+extern font_h
+extern term_zoom_in
+extern term_zoom_out
+extern term_zoom_reset
 extern kbd_is_modifier
 extern kbd_input_buf
 extern kbd_input_len
@@ -65,8 +72,7 @@ extern clip_paste_system
 %define DEFAULT_H       500
 %define PAD_X           8
 %define PAD_Y           8
-%define FONT_W          10
-%define FONT_H          20
+
 
 section .rodata
 s_compositor:   db "wl_compositor", 0
@@ -81,6 +87,7 @@ s_dev_null:     db "/dev/null", 0
 s_xdg_open_cmd: db "xdg-open", 0
 s_xdg_open_usr: db "/usr/bin/xdg-open", 0
 s_xdg_open_bin: db "/bin/xdg-open", 0
+s_cursor_shape_mgr: db "wp_cursor_shape_manager_v1", 0
 
 section .data
 win_w:          dd DEFAULT_W
@@ -124,6 +131,10 @@ itimerspec:         resq 4
 timer_exp:          resq 1
 url_argv:           resq 3
 click_url_buf:      resb 1024
+id_cursor_shape_mgr: resd 1
+id_cursor_shape_device: resd 1
+pointer_enter_serial: resd 1
+cur_cursor_shape:   resd 1
 
 section .text
 
@@ -133,6 +144,10 @@ win_init:
     mov     r12, rdi
     mov     [win_envp], rdi
     mov     dword [id_pointer], 0
+    mov     dword [id_cursor_shape_mgr], 0
+    mov     dword [id_cursor_shape_device], 0
+    mov     dword [pointer_enter_serial], 0
+    mov     dword [cur_cursor_shape], 0
     mov     byte [mouse_pressed], 0
     mov     dword [repeat_key], -1
     mov     rdi, r12
@@ -276,7 +291,7 @@ win_update:
     xor     eax, eax
 .w_pos:
     xor     edx, edx
-    mov     ecx, FONT_W
+    mov     ecx, [font_w]
     div     ecx
     test    eax, eax
     jnz     .w_nz
@@ -296,7 +311,7 @@ win_update:
     xor     eax, eax
 .h_pos:
     xor     edx, edx
-    mov     ecx, FONT_H
+    mov     ecx, [font_h]
     div     ecx
     test    eax, eax
     jnz     .h_nz
@@ -619,7 +634,32 @@ process_key_dispatch:
 
     cmp     dword [kbd_action], 0
     je      .check_kbd_input
+    cmp     dword [kbd_action], 2
+    je      .zoom_in
+    cmp     dword [kbd_action], 3
+    je      .zoom_out
+    cmp     dword [kbd_action], 4
+    je      .zoom_reset
     call    win_redraw
+    ret
+
+.zoom_in:
+    call    term_zoom_in
+    test    eax, eax
+    jz      .ret
+    call    win_apply_zoom
+    ret
+
+.zoom_out:
+    call    term_zoom_out
+    test    eax, eax
+    jz      .ret
+    call    win_apply_zoom
+    ret
+
+.zoom_reset:
+    call    term_zoom_reset
+    call    win_apply_zoom
     ret
 
 .check_kbd_input:
@@ -745,6 +785,7 @@ on_event:
     WL_BEGIN [id_seat], WL_SEAT_GET_POINTER
     WL_U32  [id_pointer]
     WL_END
+    call    init_cursor_shape_device
 .flush_seat:
     jmp     wl_flush
 
@@ -803,6 +844,7 @@ on_event:
     mov     ecx, [rdx + 16]
     mov     edx, r8d
     call    kbd_handle_modifiers
+    call    update_hover_state
     ret
 
 .pointer:
@@ -812,8 +854,17 @@ on_event:
     je      .ptr_button
     cmp     esi, WL_POINTER_ENTER
     je      .ptr_enter
+    cmp     esi, WL_POINTER_LEAVE
+    je      .ptr_leave
     cmp     esi, WL_POINTER_AXIS
     je      .ptr_axis
+    ret
+
+.ptr_leave:
+    cmp     byte [url_hover_active], 0
+    jz      .ret
+    call    term_clear_hover
+    call    win_redraw
     ret
 
 .ptr_axis:
@@ -836,10 +887,16 @@ on_event:
     ret
 
 .ptr_enter:
+    mov     eax, [rdx]
+    mov     [pointer_enter_serial], eax
+    mov     dword [cur_cursor_shape], 0
     mov     eax, [rdx + 8]
     mov     [mouse_x], eax
     mov     eax, [rdx + 12]
     mov     [mouse_y], eax
+    mov     edi, 9
+    call    set_cursor_shape
+    call    update_hover_state
     ret
 
 .ptr_motion:
@@ -848,10 +905,13 @@ on_event:
     mov     r8d, [rdx + 8]
     mov     [mouse_y], r8d
     cmp     byte [mouse_pressed], 0
-    jz      .ret
+    jz      .motion_no_drag
     call    coord_to_cell
     call    term_update_sel_end
     call    win_redraw
+    ret
+.motion_no_drag:
+    call    update_hover_state
     ret
 
 .ptr_button:
@@ -960,6 +1020,17 @@ on_event:
 
 .not_wm_base:
     mov     rdi, rbx
+    lea     rsi, [s_cursor_shape_mgr]
+    call    streq
+    test    eax, eax
+    jz      .not_cursor_shape_mgr
+    mov     ecx, 1
+    lea     r8, [s_cursor_shape_mgr]
+    lea     r9, [id_cursor_shape_mgr]
+    jmp     .bind
+
+.not_cursor_shape_mgr:
+    mov     rdi, rbx
     lea     rsi, [s_seat]
     call    streq
     test    eax, eax
@@ -983,6 +1054,7 @@ on_event:
     pop     rdi
     call    wl_u32
     WL_END
+    call    init_cursor_shape_device
 
 .registry_done:
     pop     r13
@@ -998,7 +1070,7 @@ coord_to_cell:
     xor     eax, eax
 .x_ok:
     xor     edx, edx
-    mov     ecx, FONT_W
+    mov     ecx, [font_w]
     div     ecx
     mov     edi, eax
     mov     eax, [term_cols]
@@ -1019,7 +1091,7 @@ coord_to_cell:
 .y_ok:
     mov     eax, r8d
     xor     edx, edx
-    mov     ecx, FONT_H
+    mov     ecx, [font_h]
     div     ecx
     mov     esi, eax
     mov     eax, [term_rows]
@@ -1119,4 +1191,124 @@ launch_url:
     pop     r13
     pop     r12
     pop     rbx
+    ret
+
+init_cursor_shape_device:
+    cmp     dword [id_cursor_shape_device], 0
+    jnz     .ret
+    cmp     dword [id_cursor_shape_mgr], 0
+    jz      .ret
+    cmp     dword [id_pointer], 0
+    jz      .ret
+    call    wl_new_id
+    mov     [id_cursor_shape_device], eax
+    WL_BEGIN [id_cursor_shape_mgr], 1
+    WL_U32  [id_cursor_shape_device]
+    WL_U32  [id_pointer]
+    WL_END
+    call    wl_flush
+.ret:
+    ret
+
+set_cursor_shape:
+    cmp     dword [id_cursor_shape_device], 0
+    jz      .ret
+    cmp     dword [pointer_enter_serial], 0
+    jz      .ret
+    cmp     edi, [cur_cursor_shape]
+    je      .ret
+    mov     [cur_cursor_shape], edi
+    WL_BEGIN [id_cursor_shape_device], 1
+    WL_U32  [pointer_enter_serial]
+    WL_U32  edi
+    WL_END
+    call    wl_flush
+.ret:
+    ret
+
+update_hover_state:
+    call    kbd_get_modifiers
+    test    eax, 4
+    jz      .no_ctrl
+
+    mov     eax, [mouse_x]
+    mov     r8d, [mouse_y]
+    call    coord_to_cell
+    lea     rdx, [click_url_buf]
+    mov     ecx, 1024
+    call    term_find_url_at
+    test    eax, eax
+    jz      .no_url
+
+    mov     edi, 4
+    call    set_cursor_shape
+    call    win_redraw
+    ret
+
+.no_url:
+    cmp     byte [url_hover_active], 0
+    jz      .shape_text
+    call    term_clear_hover
+    call    win_redraw
+.shape_text:
+    mov     edi, 9
+    call    set_cursor_shape
+    ret
+
+.no_ctrl:
+    cmp     byte [url_hover_active], 0
+    jz      .shape_text_no_ctrl
+    call    term_clear_hover
+    call    win_redraw
+.shape_text_no_ctrl:
+    mov     edi, 9
+    call    set_cursor_shape
+    ret
+
+win_apply_zoom:
+    mov     eax, [buf_w]
+    mov     ecx, [cfg_pad_x]
+    shl     ecx, 1
+    sub     eax, ecx
+    jns     .w_pos
+    xor     eax, eax
+.w_pos:
+    xor     edx, edx
+    mov     ecx, [font_w]
+    div     ecx
+    test    eax, eax
+    jnz     .w_nz
+    mov     eax, 1
+.w_nz:
+    cmp     eax, 256
+    jbe     .w_max
+    mov     eax, 256
+.w_max:
+    mov     r8d, eax
+
+    mov     eax, [buf_h]
+    mov     ecx, [cfg_pad_y]
+    shl     ecx, 1
+    sub     eax, ecx
+    jns     .h_pos
+    xor     eax, eax
+.h_pos:
+    xor     edx, edx
+    mov     ecx, [font_h]
+    div     ecx
+    test    eax, eax
+    jnz     .h_nz
+    mov     eax, 1
+.h_nz:
+    cmp     eax, 128
+    jbe     .h_max
+    mov     eax, 128
+.h_max:
+    mov     r9d, eax
+
+    mov     edi, r8d
+    mov     esi, r9d
+    call    term_resize
+    call    update_pty_winsize
+    call    win_redraw
     ret

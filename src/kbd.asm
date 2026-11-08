@@ -262,6 +262,18 @@ kbd_handle_key:
     je      .do_scroll_line_up
     cmp     edi, KEY_DOWN
     je      .do_scroll_line_down
+    cmp     edi, KEY_EQUAL
+    je      .do_zoom_in
+    cmp     edi, KEY_KPPLUS
+    je      .do_zoom_in
+    cmp     edi, KEY_MINUS
+    je      .do_zoom_out
+    cmp     edi, KEY_KPMINUS
+    je      .do_zoom_out
+    cmp     edi, KEY_0
+    je      .do_zoom_reset
+    cmp     edi, KEY_KP0
+    je      .do_zoom_reset
 .not_shift_special:
 
     test    eax, 4
@@ -278,6 +290,12 @@ kbd_handle_key:
     je      .send_ctrl_down
     cmp     edi, KEY_BACKSPACE
     je      .send_ctrl_bs
+    cmp     edi, KEY_KPPLUS
+    je      .do_zoom_in
+    cmp     edi, KEY_KPMINUS
+    je      .do_zoom_out
+    cmp     edi, KEY_KP0
+    je      .do_zoom_reset
 .not_ctrl_special:
 
     cmp     edi, KEY_UP
@@ -691,6 +709,20 @@ kbd_handle_key:
     call    term_scroll_view_to_bottom
     call    clip_paste_system
     mov     dword [kbd_action], 1
+    ret
+
+.do_zoom_in:
+    mov     dword [kbd_action], 2
+    ret
+
+.do_zoom_out:
+    mov     dword [kbd_action], 3
+    ret
+
+.do_zoom_reset:
+    mov     dword [kbd_action], 4
+    ret
+
 .ret:
     ret
 

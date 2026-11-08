@@ -22,6 +22,13 @@ global term_scroll_view_up
 global term_scroll_view_down
 global term_scroll_view_to_bottom
 global term_find_url_at
+global term_clear_hover
+global term_zoom_in
+global term_zoom_out
+global term_zoom_reset
+global font_w
+global font_h
+global url_hover_active
 
 extern font_glyph_data
 extern font_glyph_for_char
@@ -52,10 +59,18 @@ extern ansi_colors
 %define PAD_X          8
 %define PAD_Y          8
 
-%define FONT_W         10
-%define FONT_H         20
+section .data
+font_w:             dd 10
+font_h:             dd 20
 
 section .bss
+cand_cols:          resb 1024
+cand_rows:          resb 1024
+url_hover_active:   resb 1
+url_hover_start_col: resd 1
+url_hover_start_row: resd 1
+url_hover_end_col:   resd 1
+url_hover_end_row:   resd 1
 term_cols:          resd 1
 term_rows:          resd 1
 term_cursor_col:    resd 1
@@ -2488,14 +2503,32 @@ term_render:
     pop     r8
     mov     rsi, rax
 
-    imul    eax, ebp, FONT_W
+    mov     eax, ebp
+    imul    eax, [font_w]
     add     eax, [cfg_pad_x]
-    imul    ecx, r15d, FONT_H
+    mov     ecx, r15d
+    imul    ecx, [font_h]
     add     ecx, [cfg_pad_y]
 
     mov     rdi, r12
     mov     edx, r13d
     call    draw_glyph
+
+    push    r12
+    push    r13
+    mov     edi, ebp
+    mov     esi, r15d
+    call    is_cell_url_hovered
+    test    eax, eax
+    jz      .no_wavy1
+    mov     edi, ebp
+    mov     esi, r15d
+    mov     rdx, r12
+    mov     ecx, r13d
+    call    draw_wavy_underline
+.no_wavy1:
+    pop     r13
+    pop     r12
 
 .col_next:
     inc     ebp
@@ -2503,24 +2536,42 @@ term_render:
 
 .space_cell:
     cmp     r9d, [cfg_bg]
-    je      .col_next
-    imul    eax, ebp, FONT_W
+    je      .check_space_wavy
+    mov     eax, ebp
+    imul    eax, [font_w]
     add     eax, [cfg_pad_x]
-    imul    ecx, r15d, FONT_H
+    mov     ecx, r15d
+    imul    ecx, [font_h]
     add     ecx, [cfg_pad_y]
     imul    ecx, r13d
     add     ecx, eax
     lea     rdi, [r12 + rcx*4]
-    mov     edx, FONT_H
+    mov     edx, [font_h]
     mov     eax, r9d
     or      eax, 0xff000000
 .sp_row:
     mov     rsi, rdi
-    mov     ecx, FONT_W
+    mov     ecx, [font_w]
     rep     stosd
     lea     rdi, [rsi + r13*4]
     dec     edx
     jnz     .sp_row
+.check_space_wavy:
+    push    r12
+    push    r13
+    mov     edi, ebp
+    mov     esi, r15d
+    call    is_cell_url_hovered
+    test    eax, eax
+    jz      .no_wavy2
+    mov     edi, ebp
+    mov     esi, r15d
+    mov     rdx, r12
+    mov     ecx, r13d
+    call    draw_wavy_underline
+.no_wavy2:
+    pop     r13
+    pop     r12
     jmp     .col_next
 .row_next:
     inc     r15d
@@ -2539,21 +2590,21 @@ term_render:
     cmp     ecx, [term_rows]
     jae     .render_done
 
-    imul    eax, FONT_W
+    imul    eax, [font_w]
     add     eax, [cfg_pad_x]
-    imul    ecx, FONT_H
+    imul    ecx, [font_h]
     add     ecx, [cfg_pad_y]
 
     imul    ecx, r13d
     add     ecx, eax
     lea     rdi, [r12 + rcx*4]
 
-    mov     edx, FONT_H
+    mov     edx, [font_h]
     mov     eax, [cfg_cursor]
     or      eax, 0xff000000
 .c_row:
     mov     rsi, rdi
-    mov     ecx, FONT_W
+    mov     ecx, [font_w]
     rep     stosd
     lea     rdi, [rsi + r13*4]
     dec     edx
@@ -2573,6 +2624,8 @@ draw_glyph:
     push    r12
     push    r13
     push    r14
+    push    r15
+    push    rbp
 
     mov     r10d, edx
     imul    ecx, r10d
@@ -2587,15 +2640,27 @@ draw_glyph:
 
     xor     ebx, ebx
 .line_loop:
-    cmp     ebx, FONT_H
+    cmp     ebx, [font_h]
     jae     .done
 
+    imul    eax, ebx, 20
+    xor     edx, edx
+    div     dword [font_h]
+    imul    eax, 10
+    lea     r14, [rsi + rax]
+
     mov     rdi, r11
-    mov     ecx, FONT_W
+    xor     r15d, r15d
 
 .pixel_loop:
-    movzx   eax, byte [rsi]
-    inc     rsi
+    cmp     r15d, [font_w]
+    jae     .next_line
+
+    imul    eax, r15d, 10
+    xor     edx, edx
+    div     dword [font_w]
+    movzx   eax, byte [r14 + rax]
+
     test    eax, eax
     jz      .bg_pixel
     cmp     eax, 255
@@ -2631,14 +2696,17 @@ draw_glyph:
 
 .next_pixel:
     add     rdi, 4
-    dec     ecx
-    jnz     .pixel_loop
+    inc     r15d
+    jmp     .pixel_loop
 
+.next_line:
     lea     r11, [r11 + r10*4]
     inc     ebx
     jmp     .line_loop
 
 .done:
+    pop     rbp
+    pop     r15
     pop     r14
     pop     r13
     pop     r12
@@ -2833,6 +2901,8 @@ term_find_url_at:
     jz      .fwd_done
 
     mov     [r14 + r8], r10b
+    mov     byte [cand_cols + r8], bl
+    mov     byte [cand_rows + r8], bpl
     inc     r8d
     lea     eax, [r15d - 2]
     cmp     r8d, eax
@@ -3004,10 +3074,20 @@ term_find_url_at:
 
 .null_term:
     mov     byte [r14 + r8], 0
+    movzx   eax, byte [cand_cols + rcx]
+    mov     [url_hover_start_col], eax
+    movzx   eax, byte [cand_rows + rcx]
+    mov     [url_hover_start_row], eax
+    movzx   eax, byte [cand_cols + rdx]
+    mov     [url_hover_end_col], eax
+    movzx   eax, byte [cand_rows + rdx]
+    mov     [url_hover_end_row], eax
+    mov     byte [url_hover_active], 1
     mov     eax, r8d
     jmp     .done
 
 .fail:
+    mov     byte [url_hover_active], 0
     xor     eax, eax
 .done:
     pop     rbp
@@ -3020,4 +3100,116 @@ term_find_url_at:
 
 .early_fail:
     xor     eax, eax
+    ret
+
+is_cell_url_hovered:
+    cmp     byte [url_hover_active], 0
+    jz      .no_hover
+    cmp     esi, [url_hover_start_row]
+    jb      .no_hover
+    cmp     esi, [url_hover_end_row]
+    ja      .no_hover
+    cmp     esi, [url_hover_start_row]
+    jne     .check_end
+    cmp     edi, [url_hover_start_col]
+    jb      .no_hover
+.check_end:
+    cmp     esi, [url_hover_end_row]
+    jne     .hover_yes
+    cmp     edi, [url_hover_end_col]
+    ja      .no_hover
+.hover_yes:
+    mov     eax, 1
+    ret
+.no_hover:
+    xor     eax, eax
+    ret
+
+draw_wavy_underline:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+
+    mov     eax, edi
+    imul    eax, [font_w]
+    add     eax, [cfg_pad_x]
+    mov     r14d, eax
+
+    mov     eax, esi
+    imul    eax, [font_h]
+    add     eax, [cfg_pad_y]
+    add     eax, [font_h]
+    sub     eax, 2
+    mov     r15d, eax
+
+    mov     r12, rdx
+    mov     r13d, ecx
+
+    xor     ebx, ebx
+.wave_x:
+    cmp     ebx, [font_w]
+    jae     .wave_done
+
+    lea     eax, [r14d + ebx]
+    mov     edx, eax
+    shr     edx, 1
+    and     edx, 1
+
+    mov     eax, r15d
+    sub     eax, edx
+
+    imul    eax, r13d
+    lea     edx, [r14d + ebx]
+    add     eax, edx
+    lea     rax, [r12 + rax*4]
+
+    mov     dword [rax], 0xff58a6ff
+
+    inc     ebx
+    jmp     .wave_x
+
+.wave_done:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+term_clear_hover:
+    mov     byte [url_hover_active], 0
+    ret
+
+term_zoom_in:
+    cmp     dword [font_w], 28
+    jge     .zoom_ret
+    inc     dword [font_w]
+    mov     eax, [font_w]
+    shl     eax, 1
+    mov     [font_h], eax
+    mov     eax, 1
+    ret
+.zoom_ret:
+    xor     eax, eax
+    ret
+
+term_zoom_out:
+    cmp     dword [font_w], 6
+    jle     .zoom_ret
+    dec     dword [font_w]
+    mov     eax, [font_w]
+    shl     eax, 1
+    mov     [font_h], eax
+    mov     eax, 1
+    ret
+.zoom_ret:
+    xor     eax, eax
+    ret
+
+term_zoom_reset:
+    mov     dword [font_w], 10
+    mov     dword [font_h], 20
+    mov     eax, 1
     ret
