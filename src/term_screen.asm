@@ -43,6 +43,13 @@ extern cfg_sel_bg
 extern cfg_sel_fg
 extern cfg_bg_pixel
 extern ansi_colors
+extern kitty_gfx_init
+extern kitty_gfx_clear
+extern kitty_gfx_scroll_up
+extern kitty_gfx_apc_begin
+extern kitty_gfx_apc_char
+extern kitty_gfx_apc_end
+extern kitty_gfx_render
 
 %define MAX_COLS       256
 %define MAX_ROWS       128
@@ -415,6 +422,7 @@ term_clear_grid:
     xor     eax, eax
     rep     stosb
     mov     dword [shrink_scrolled], 0
+    call    kitty_gfx_clear
     ret
 
 term_resize:
@@ -676,7 +684,7 @@ term_process_char:
     cmp     edi, ']'
     je      .to_osc
     cmp     edi, '_'
-    je      .to_dcs
+    je      .to_apc
     cmp     edi, 'P'
     je      .to_dcs
     cmp     edi, '^'
@@ -704,6 +712,11 @@ term_process_char:
     cmp     edi, '#'
     je      .to_charset
     mov     dword [esc_state], 0
+    ret
+
+.to_apc:
+    mov     dword [esc_state], 5
+    call    kitty_gfx_apc_begin
     ret
 
 .to_charset:
@@ -793,17 +806,28 @@ term_process_char:
 
 .state_dcs:
     cmp     edi, 7
-    je      .osc_end
+    je      .apc_bel
     cmp     edi, 27
     je      .dcs_to_esc
+    call    kitty_gfx_apc_char
     ret
 .dcs_to_esc:
     mov     dword [esc_state], 6
     ret
 .state_dcs_esc:
     cmp     edi, '\'
-    je      .osc_end
+    je      .apc_st
     mov     dword [esc_state], 5
+    push    rdi
+    mov     edi, 27
+    call    kitty_gfx_apc_char
+    pop     rdi
+    call    kitty_gfx_apc_char
+    ret
+.apc_bel:
+.apc_st:
+    call    kitty_gfx_apc_end
+    mov     dword [esc_state], 0
     ret
 
 .state_csi:
@@ -1029,6 +1053,8 @@ term_scroll_up:
     dec     ecx
     jnz     .clear_last
 
+    mov     edi, 1
+    call    kitty_gfx_scroll_up
     pop     rdi
     pop     rsi
     pop     rbx
@@ -2448,7 +2474,7 @@ term_render:
     xor     r15d, r15d
 .row_loop:
     cmp     r15d, [term_rows]
-    jae     .draw_cursor
+    jae     .draw_gfx
     mov     rax, [vis_row_ptrs + r15*8]
     mov     [cur_row_ptr], rax
     mov     eax, [vis_row_cols + r15*4]
@@ -2576,6 +2602,25 @@ term_render:
 .row_next:
     inc     r15d
     jmp     .row_loop
+
+.draw_gfx:
+    push    r12
+    push    r13
+    push    r14
+    mov     rdi, r12
+    mov     esi, r13d
+    mov     edx, r14d
+    mov     ecx, [font_w]
+    mov     r8d, [font_h]
+    mov     r9d, [cfg_pad_x]
+    sub     rsp, 8
+    mov     eax, [cfg_pad_y]
+    mov     [rsp], rax
+    call    kitty_gfx_render
+    add     rsp, 8
+    pop     r14
+    pop     r13
+    pop     r12
 
 .draw_cursor:
     cmp     dword [scroll_offset], 0

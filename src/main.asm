@@ -26,6 +26,7 @@ section .bss
 buf:            resb BUF_SIZE
 pfds:           resb 24
 status:         resd 1
+main_envp:      resq 1
 
 section .text
 global _start
@@ -33,13 +34,14 @@ global _start
 _start:
     mov     rax, [rsp]
     lea     r15, [rsp + rax*8 + 16]
+    mov     [main_envp], r15
 
-    mov     rdi, r15
+    mov     rdi, [main_envp]
     call    win_init
     test    rax, rax
     js      .fail_window
 
-    mov     rdi, r15
+    mov     rdi, [main_envp]
     call    find_shell
     mov     r14, rax
 
@@ -55,7 +57,7 @@ _start:
     mov     rdi, rbx
     mov     rsi, r12
     mov     rdx, r14
-    mov     rcx, r15
+    mov     rcx, [main_envp]
     call    pty_spawn
     test    rax, rax
     js      .fail
