@@ -5,7 +5,8 @@ global pty_open
 global pty_spawn
 
 section .rodata
-ptmx_path:  db "/dev/ptmx", 0
+ptmx_path:      db "/dev/ptmx", 0
+term_env_str:   db "TERM=xterm-256color", 0
 
 section .text
 
@@ -72,6 +73,37 @@ pty_spawn:
     inc     esi
     cmp     esi, 3
     jb      .dup
+
+    sub     rsp, 4096
+    mov     rdi, rsp
+    mov     rsi, r13
+    xor     ecx, ecx
+    xor     r8d, r8d
+.env_loop:
+    cmp     ecx, 508
+    jae     .env_done
+    mov     rax, [rsi + rcx*8]
+    test    rax, rax
+    jz      .env_done
+    cmp     dword [rax], 0x4d524554
+    jne     .env_store
+    cmp     byte [rax + 4], '='
+    jne     .env_store
+    lea     rax, [term_env_str]
+    mov     r8d, 1
+.env_store:
+    mov     [rdi + rcx*8], rax
+    inc     ecx
+    jmp     .env_loop
+.env_done:
+    test    r8d, r8d
+    jnz     .env_null
+    lea     rax, [term_env_str]
+    mov     [rdi + rcx*8], rax
+    inc     ecx
+.env_null:
+    mov     qword [rdi + rcx*8], 0
+    mov     r13, rdi
 
     push    0
     push    r12

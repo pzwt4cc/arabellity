@@ -27,6 +27,7 @@ extern write_all
 extern term_init
 extern term_resize
 extern term_render
+extern term_feed
 extern term_cols
 extern term_rows
 extern term_scroll_view_up
@@ -253,7 +254,15 @@ win_update:
     xor     edx, edx
     mov     ecx, FONT_W
     div     ecx
-    mov     edi, eax
+    test    eax, eax
+    jnz     .w_nz
+    mov     eax, 1
+.w_nz:
+    cmp     eax, 256
+    jbe     .w_max
+    mov     eax, 256
+.w_max:
+    mov     r8d, eax
 
     mov     eax, [buf_h]
     sub     eax, PAD_Y * 2
@@ -263,10 +272,32 @@ win_update:
     xor     edx, edx
     mov     ecx, FONT_H
     div     ecx
-    mov     esi, eax
+    test    eax, eax
+    jnz     .h_nz
+    mov     eax, 1
+.h_nz:
+    cmp     eax, 128
+    jbe     .h_max
+    mov     eax, 128
+.h_max:
+    mov     r9d, eax
 
+    cmp     r8d, [term_cols]
+    jne     .do_term_resize
+    cmp     r9d, [term_rows]
+    je      .present
+
+.do_term_resize:
+    push    r8
+    push    r9
+    xor     edi, edi
+    call    drain_pty_sync
+    pop     rsi
+    pop     rdi
     call    term_resize
     call    update_pty_winsize
+    mov     edi, 8
+    call    drain_pty_sync
 
 .present:
     call    win_redraw
@@ -274,6 +305,44 @@ win_update:
     jmp     wl_flush
 .fail:
     mov     byte [close_requested], 1
+    ret
+
+drain_pty_sync:
+    cmp     dword [win_pty_fd], 0
+    jl      .ret
+    push    rbx
+    sub     rsp, 4112
+    mov     ebx, edi
+.poll_loop:
+    mov     eax, [win_pty_fd]
+    mov     [rsp], eax
+    mov     word [rsp + 4], POLLIN
+    mov     word [rsp + 6], 0
+    mov     eax, SYS_POLL
+    mov     rdi, rsp
+    mov     esi, 1
+    mov     edx, ebx
+    syscall
+    test    rax, rax
+    jle     .done
+    test    word [rsp + 6], POLLIN
+    jz      .done
+    mov     eax, SYS_READ
+    mov     edi, [win_pty_fd]
+    lea     rsi, [rsp + 16]
+    mov     edx, 4096
+    syscall
+    test    rax, rax
+    jle     .done
+    lea     rdi, [rsp + 16]
+    mov     rsi, rax
+    call    term_feed
+    mov     ebx, 1
+    jmp     .poll_loop
+.done:
+    add     rsp, 4112
+    pop     rbx
+.ret:
     ret
 
 update_pty_winsize:
