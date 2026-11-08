@@ -16,6 +16,8 @@ global term_has_sel
 global term_set_sel_start
 global term_update_sel_end
 global term_clear_sel
+global term_copy_selection
+global term_get_selection
 global term_scroll_view_up
 global term_scroll_view_down
 global term_scroll_view_to_bottom
@@ -29,6 +31,7 @@ extern win_pty_fd
 %define MAX_ROWS       128
 %define CELL_SIZE      16
 %define SCROLLBACK_MAX 1024
+%define CLIP_MAX       65536
 
 %define COLOR_BG       0x000000
 %define COLOR_FG       0xc9d1d9
@@ -71,6 +74,9 @@ utf8_codepoint:     resd 1
 cursor_visible:     resb 1
 cpr_buf:            resb 32
 
+clip_len:           resd 1
+clip_buf:           resb CLIP_MAX
+
 grid:               resb MAX_COLS * MAX_ROWS * CELL_SIZE
 scrollback:         resb SCROLLBACK_MAX * MAX_COLS * CELL_SIZE
 empty_line:         resb MAX_COLS * CELL_SIZE
@@ -101,6 +107,7 @@ term_init:
     mov     dword [scrollback_head], 0
     mov     dword [scroll_offset], 0
     call    init_empty_line
+    call    init_scrollback
     call    term_clear_grid
     ret
 
@@ -120,6 +127,22 @@ init_empty_line:
     jnz     .el_fill
     ret
 
+init_scrollback:
+    lea     rdi, [scrollback]
+    mov     ecx, SCROLLBACK_MAX * MAX_COLS
+    mov     eax, ' '
+    mov     edx, [cur_fg]
+    mov     r8d, [cur_bg]
+.sb_fill:
+    mov     dword [rdi], eax
+    mov     dword [rdi + 4], edx
+    mov     dword [rdi + 8], r8d
+    mov     dword [rdi + 12], 0
+    add     rdi, CELL_SIZE
+    dec     ecx
+    jnz     .sb_fill
+    ret
+
 term_set_sel_start:
     mov     [term_sel_start_col], edi
     mov     [term_sel_start_row], esi
@@ -135,6 +158,190 @@ term_update_sel_end:
 
 term_clear_sel:
     mov     byte [term_has_sel], 0
+    ret
+
+term_get_selection:
+    lea     rax, [clip_buf]
+    mov     edx, [clip_len]
+    ret
+
+term_copy_selection:
+    cmp     byte [term_has_sel], 0
+    jz      .empty_ret
+
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rbp
+
+    mov     r8d, [term_sel_start_row]
+    mov     r9d, [term_sel_start_col]
+    mov     r10d, [term_sel_end_row]
+    mov     r11d, [term_sel_end_col]
+
+    cmp     r8d, r10d
+    jb      .sel_ordered
+    ja      .sel_swap
+    cmp     r9d, r11d
+    jbe     .sel_ordered
+.sel_swap:
+    xchg    r8d, r10d
+    xchg    r9d, r11d
+.sel_ordered:
+    mov     r12d, r8d
+    mov     r13d, r9d
+    mov     r14d, r10d
+    mov     r15d, r11d
+
+    lea     rbx, [clip_buf]
+    lea     rbp, [clip_buf + CLIP_MAX - 8]
+
+.copy_row_loop:
+    cmp     r12d, r14d
+    ja      .copy_done
+
+    mov     edi, r12d
+    call    get_row_ptr
+    mov     rsi, rax
+
+    xor     ecx, ecx
+    cmp     r12d, r14d
+    je      .same_end_row
+    mov     edx, [term_cols]
+    dec     edx
+    jmp     .got_end_col
+.same_end_row:
+    mov     edx, r15d
+.got_end_col:
+    cmp     r12d, [term_sel_start_row]
+    je      .check_start
+    cmp     r12d, [term_sel_end_row]
+    je      .check_start
+    jmp     .got_start_col
+.check_start:
+    mov     ecx, r13d
+    mov     r13d, 0
+.got_start_col:
+    mov     r8, rbx
+
+.copy_col_loop:
+    cmp     ecx, edx
+    ja      .row_copied
+    cmp     rbx, rbp
+    jae     .copy_done
+
+    mov     eax, ecx
+    shl     eax, 4
+    mov     edi, [rsi + rax]
+    cmp     edi, 32
+    jae     .cp_valid
+    mov     edi, 32
+.cp_valid:
+    cmp     edi, 0x80
+    jb      .utf8_1
+    cmp     edi, 0x800
+    jb      .utf8_2
+    cmp     edi, 0x10000
+    jb      .utf8_3
+
+    mov     eax, edi
+    shr     eax, 18
+    and     al, 0x07
+    or      al, 0xF0
+    mov     [rbx], al
+    mov     eax, edi
+    shr     eax, 12
+    and     al, 0x3F
+    or      al, 0x80
+    mov     [rbx + 1], al
+    mov     eax, edi
+    shr     eax, 6
+    and     al, 0x3F
+    or      al, 0x80
+    mov     [rbx + 2], al
+    mov     eax, edi
+    and     al, 0x3F
+    or      al, 0x80
+    mov     [rbx + 3], al
+    add     rbx, 4
+    mov     r8, rbx
+    jmp     .next_col
+
+.utf8_3:
+    mov     eax, edi
+    shr     eax, 12
+    and     al, 0x0F
+    or      al, 0xE0
+    mov     [rbx], al
+    mov     eax, edi
+    shr     eax, 6
+    and     al, 0x3F
+    or      al, 0x80
+    mov     [rbx + 1], al
+    mov     eax, edi
+    and     al, 0x3F
+    or      al, 0x80
+    mov     [rbx + 2], al
+    add     rbx, 3
+    mov     r8, rbx
+    jmp     .next_col
+
+.utf8_2:
+    mov     eax, edi
+    shr     eax, 6
+    and     al, 0x1F
+    or      al, 0xC0
+    mov     [rbx], al
+    mov     eax, edi
+    and     al, 0x3F
+    or      al, 0x80
+    mov     [rbx + 1], al
+    add     rbx, 2
+    mov     r8, rbx
+    jmp     .next_col
+
+.utf8_1:
+    mov     [rbx], dil
+    inc     rbx
+    cmp     dil, 32
+    je      .next_col
+    mov     r8, rbx
+
+.next_col:
+    inc     ecx
+    jmp     .copy_col_loop
+
+.row_copied:
+    cmp     r12d, r14d
+    je      .no_trim
+    mov     rbx, r8
+    cmp     rbx, rbp
+    jae     .copy_done
+    mov     byte [rbx], 10
+    inc     rbx
+.no_trim:
+    inc     r12d
+    jmp     .copy_row_loop
+
+.copy_done:
+    lea     rax, [clip_buf]
+    mov     rdx, rbx
+    sub     rdx, rax
+    mov     [clip_len], edx
+
+    pop     rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+.empty_ret:
+    xor     eax, eax
+    xor     edx, edx
     ret
 
 term_clear_grid:
@@ -465,8 +672,7 @@ term_scroll_up:
     imul    eax, MAX_COLS * CELL_SIZE
     lea     rdi, [scrollback + rax]
     lea     rsi, [grid]
-    mov     ecx, [term_cols]
-    shl     ecx, 2
+    mov     ecx, MAX_COLS * (CELL_SIZE / 4)
     rep     movsd
 
     mov     eax, [scrollback_head]
@@ -496,7 +702,7 @@ term_scroll_up:
     imul    eax, MAX_COLS
     shl     eax, 4
     lea     rdi, [grid + rax]
-    mov     ecx, [term_cols]
+    mov     ecx, MAX_COLS
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
@@ -531,7 +737,7 @@ term_scroll_down:
     cld
 
     lea     rdi, [grid]
-    mov     ecx, [term_cols]
+    mov     ecx, MAX_COLS
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
@@ -735,6 +941,7 @@ term_handle_csi:
     mov     rax, r8
     shl     rax, 4
     lea     rsi, [rdi + rax]
+    shl     ecx, 2
     rep     movsd
 .dch_clear:
     mov     eax, [term_cursor_row]
@@ -955,7 +1162,7 @@ term_handle_csi:
     shl     ecx, 4
     lea     rdi, [grid + rcx]
     push    rax
-    mov     ecx, [term_cols]
+    mov     ecx, MAX_COLS
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
@@ -986,7 +1193,7 @@ term_handle_csi:
     add     eax, [term_cursor_col]
     shl     eax, 4
     lea     rdi, [grid + rax]
-    mov     ecx, [term_cols]
+    mov     ecx, MAX_COLS
     sub     ecx, [term_cursor_col]
     jle     .el_done
     mov     eax, ' '
@@ -1028,7 +1235,7 @@ term_handle_csi:
     imul    eax, MAX_COLS
     shl     eax, 4
     lea     rdi, [grid + rax]
-    mov     ecx, [term_cols]
+    mov     ecx, MAX_COLS
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]

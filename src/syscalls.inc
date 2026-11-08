@@ -6,6 +6,7 @@
 %define SYS_MMAP        9
 %define SYS_MUNMAP      11
 %define SYS_IOCTL       16
+%define SYS_PIPE        22
 %define SYS_DUP2        33
 %define SYS_SOCKET      41
 %define SYS_CONNECT     42
@@ -16,6 +17,7 @@
 %define SYS_WAIT4       61
 %define SYS_FTRUNCATE   77
 %define SYS_SETSID      112
+%define SYS_PIPE2       293
 %define SYS_MEMFD_CREATE 319
 
 %define STDIN           0

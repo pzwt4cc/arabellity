@@ -23,6 +23,12 @@ font_glyph_data:
     ret
 
 font_glyph_for_char:
+    cmp     edi, 32
+    ja      .do_search
+    xor     eax, eax
+    ret
+
+.do_search:
     mov     r8d, [font_data]
     mov     r9d, [font_data + 4]
     test    r9d, r9d
@@ -38,7 +44,7 @@ font_glyph_for_char:
 
 .bin_search:
     cmp     eax, edx
-    ja      .fallback
+    jg      .fallback
     lea     ecx, [rax + rdx]
     shr     ecx, 1
     mov     r10d, [rsi + rcx*8]
@@ -48,6 +54,8 @@ font_glyph_for_char:
     lea     eax, [rcx + 1]
     jmp     .bin_search
 .left:
+    test    ecx, ecx
+    jz      .fallback
     lea     edx, [rcx - 1]
     jmp     .bin_search
 
@@ -56,5 +64,5 @@ font_glyph_for_char:
     ret
 
 .fallback:
-    mov     edi, '?'
-    jmp     font_glyph_for_char
+    mov     eax, 1
+    ret

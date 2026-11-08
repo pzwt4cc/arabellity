@@ -8,6 +8,7 @@ global win_redraw
 global on_event
 global close_requested
 global win_pty_fd
+global win_envp
 global update_pty_winsize
 
 extern wl_connect
@@ -32,6 +33,7 @@ extern term_scroll_view_to_bottom
 extern term_set_sel_start
 extern term_update_sel_end
 extern term_clear_sel
+extern term_copy_selection
 extern term_sel_start_col
 extern term_sel_start_row
 extern term_sel_end_col
@@ -40,6 +42,9 @@ extern kbd_handle_key
 extern kbd_handle_modifiers
 extern kbd_input_buf
 extern kbd_input_len
+extern kbd_action
+extern clip_copy_system
+extern clip_paste_system
 
 %define DEFAULT_W       800
 %define DEFAULT_H       500
@@ -62,6 +67,7 @@ section .data
 win_w:          dd DEFAULT_W
 win_h:          dd DEFAULT_H
 win_pty_fd:     dd -1
+win_envp:       dq 0
 
 section .bss
 id_registry:        resd 1
@@ -95,6 +101,7 @@ win_init:
     push    rbx
     push    r12
     mov     r12, rdi
+    mov     [win_envp], rdi
     mov     dword [id_pointer], 0
     mov     byte [mouse_pressed], 0
     call    term_init
@@ -221,6 +228,9 @@ win_update:
 
     mov     eax, [buf_w]
     sub     eax, PAD_X * 2
+    jns     .w_pos
+    xor     eax, eax
+.w_pos:
     xor     edx, edx
     mov     ecx, FONT_W
     div     ecx
@@ -228,6 +238,9 @@ win_update:
 
     mov     eax, [buf_h]
     sub     eax, PAD_Y * 2
+    jns     .h_pos
+    xor     eax, eax
+.h_pos:
     xor     edx, edx
     mov     ecx, FONT_H
     div     ecx
@@ -500,19 +513,19 @@ on_event:
 .kbd_key:
     mov     edi, [rdx + 8]
     mov     esi, [rdx + 12]
-    push    rdi
-    push    rsi
-    test    esi, esi
-    jz      .no_scroll_reset
-    call    term_scroll_view_to_bottom
-.no_scroll_reset:
-    pop     rsi
-    pop     rdi
     call    kbd_handle_key
 
+    cmp     dword [kbd_action], 0
+    je      .check_kbd_input
+    call    win_redraw
+    ret
+
+.check_kbd_input:
     mov     edx, [kbd_input_len]
     test    edx, edx
     jz      .ret
+    call    term_scroll_view_to_bottom
+    mov     edx, [kbd_input_len]
     mov     edi, [win_pty_fd]
     test    edi, edi
     js      .ret
@@ -580,6 +593,8 @@ on_event:
 
 .ptr_button:
     mov     eax, [rdx + 8]
+    cmp     eax, 274
+    je      .middle_btn
     cmp     eax, 272
     jne     .ret
     mov     eax, [rdx + 12]
@@ -593,16 +608,29 @@ on_event:
     call    win_redraw
     ret
 
+.middle_btn:
+    mov     eax, [rdx + 12]
+    test    eax, eax
+    jz      .ret
+    call    term_scroll_view_to_bottom
+    call    clip_paste_system
+    call    win_redraw
+    ret
+
 .btn_released:
     mov     byte [mouse_pressed], 0
     mov     eax, [term_sel_start_col]
     cmp     eax, [term_sel_end_col]
-    jne     .ret
+    jne     .copy_on_select
     mov     eax, [term_sel_start_row]
     cmp     eax, [term_sel_end_row]
-    jne     .ret
+    jne     .copy_on_select
     call    term_clear_sel
     call    win_redraw
+    ret
+
+.copy_on_select:
+    call    term_copy_selection
     ret
 
 .registry:
