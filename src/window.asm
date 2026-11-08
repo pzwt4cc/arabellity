@@ -51,6 +51,9 @@ extern term_sel_end_col
 extern term_sel_end_row
 extern kbd_handle_key
 extern kbd_handle_modifiers
+extern kbd_get_modifiers
+extern term_find_url_at
+extern term_clear_sel
 extern kbd_is_modifier
 extern kbd_input_buf
 extern kbd_input_len
@@ -74,6 +77,10 @@ s_title:        db APP_NAME, 0
 err_wl:         db APP_NAME, ": wayland: "
 err_wl_len      equ $ - err_wl
 nl:             db 10
+s_dev_null:     db "/dev/null", 0
+s_xdg_open_cmd: db "xdg-open", 0
+s_xdg_open_usr: db "/usr/bin/xdg-open", 0
+s_xdg_open_bin: db "/bin/xdg-open", 0
 
 section .data
 win_w:          dd DEFAULT_W
@@ -115,6 +122,8 @@ close_requested:    resb 1
 winsize_struct:     resw 4
 itimerspec:         resq 4
 timer_exp:          resq 1
+url_argv:           resq 3
+click_url_buf:      resb 1024
 
 section .text
 
@@ -854,6 +863,23 @@ on_event:
     mov     eax, [rdx + 12]
     test    eax, eax
     jz      .btn_released
+    call    kbd_get_modifiers
+    test    eax, 4
+    jz      .normal_click
+    mov     eax, [mouse_x]
+    mov     r8d, [mouse_y]
+    call    coord_to_cell
+    lea     rdx, [click_url_buf]
+    mov     ecx, 1024
+    call    term_find_url_at
+    test    eax, eax
+    jz      .ret
+    call    term_clear_sel
+    lea     rdi, [click_url_buf]
+    call    launch_url
+    ret
+
+.normal_click:
     mov     byte [mouse_pressed], 1
     mov     eax, [mouse_x]
     mov     r8d, [mouse_y]
@@ -1006,4 +1032,91 @@ coord_to_cell:
 .row_zero:
     xor     esi, esi
 .row_done:
+    ret
+
+launch_url:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    mov     r12, rdi
+
+    mov     eax, SYS_FORK
+    syscall
+    test    rax, rax
+    js      .url_ret
+    jnz     .url_parent
+
+    mov     eax, SYS_FORK
+    syscall
+    test    rax, rax
+    js      .url_child_fail
+    jnz     .url_child_exit
+
+    mov     eax, SYS_SETSID
+    syscall
+
+    mov     eax, SYS_OPEN
+    lea     rdi, [s_dev_null]
+    mov     esi, O_RDWR
+    xor     edx, edx
+    syscall
+    test    rax, rax
+    js      .url_do_exec
+    mov     r13, rax
+    xor     esi, esi
+.url_dup:
+    mov     eax, SYS_DUP2
+    mov     rdi, r13
+    syscall
+    inc     esi
+    cmp     esi, 3
+    jb      .url_dup
+    mov     eax, SYS_CLOSE
+    mov     rdi, r13
+    syscall
+
+.url_do_exec:
+    lea     rax, [s_xdg_open_cmd]
+    mov     [url_argv], rax
+    mov     [url_argv + 8], r12
+    mov     qword [url_argv + 16], 0
+
+    mov     eax, SYS_EXECVE
+    lea     rdi, [s_xdg_open_usr]
+    lea     rsi, [url_argv]
+    mov     rdx, [win_envp]
+    syscall
+
+    mov     eax, SYS_EXECVE
+    lea     rdi, [s_xdg_open_bin]
+    lea     rsi, [url_argv]
+    mov     rdx, [win_envp]
+    syscall
+
+.url_child_fail:
+    mov     eax, SYS_EXIT
+    mov     edi, 1
+    syscall
+
+.url_child_exit:
+    mov     eax, SYS_EXIT
+    xor     edi, edi
+    syscall
+
+.url_parent:
+    mov     edi, eax
+    xor     esi, esi
+    xor     edx, edx
+    xor     r10, r10
+    mov     eax, SYS_WAIT4
+    syscall
+
+.url_ret:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
     ret

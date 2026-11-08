@@ -3,6 +3,7 @@ default rel
 
 global kbd_handle_key
 global kbd_handle_modifiers
+global kbd_get_modifiers
 global kbd_is_modifier
 global kbd_input_buf
 global kbd_input_len
@@ -227,6 +228,11 @@ kbd_handle_modifiers:
     mov     [mod_latched], esi
     mov     [mod_locked], edx
     mov     [mod_group], ecx
+    ret
+
+kbd_get_modifiers:
+    mov     eax, [mod_depressed]
+    or      eax, [mod_latched]
     ret
 
 kbd_handle_key:

@@ -21,6 +21,7 @@ global term_get_selection
 global term_scroll_view_up
 global term_scroll_view_down
 global term_scroll_view_to_bottom
+global term_find_url_at
 
 extern font_glyph_data
 extern font_glyph_for_char
@@ -2642,4 +2643,381 @@ draw_glyph:
     pop     r13
     pop     r12
     pop     rbx
+    ret
+
+get_cell_char:
+    cmp     esi, [term_rows]
+    jae     .cell_invalid
+    cmp     edi, [term_cols]
+    jae     .cell_invalid
+    mov     rax, [vis_row_ptrs + rsi*8]
+    test    rax, rax
+    jz      .cell_invalid
+    mov     edx, edi
+    shl     edx, 4
+    mov     eax, [rax + rdx]
+    ret
+.cell_invalid:
+    xor     eax, eax
+    ret
+
+is_url_char:
+    cmp     eax, 33
+    jb      .not_url_char
+    cmp     eax, 126
+    ja      .not_url_char
+    cmp     al, 34
+    je      .not_url_char
+    cmp     al, 39
+    je      .not_url_char
+    cmp     al, 96
+    je      .not_url_char
+    cmp     al, '<'
+    je      .not_url_char
+    cmp     al, '>'
+    je      .not_url_char
+    cmp     al, 92
+    je      .not_url_char
+    cmp     al, '^'
+    je      .not_url_char
+    cmp     al, '{'
+    je      .not_url_char
+    cmp     al, '|'
+    je      .not_url_char
+    cmp     al, '}'
+    je      .not_url_char
+    mov     eax, 1
+    ret
+.not_url_char:
+    xor     eax, eax
+    ret
+
+step_prev_cell:
+    test    edi, edi
+    jz      .prev_row
+    dec     edi
+    mov     eax, 1
+    ret
+.prev_row:
+    test    esi, esi
+    jz      .cannot_prev
+    dec     esi
+    mov     rax, [vis_row_ptrs + rsi*8 + 8]
+    mov     rdx, [vis_row_ptrs + rsi*8]
+    test    rax, rax
+    jz      .check_wrapped_flag
+    test    rdx, rdx
+    jz      .check_wrapped_flag
+    mov     ecx, [term_cols]
+    shl     ecx, 4
+    add     rdx, rcx
+    cmp     rax, rdx
+    je      .is_prev_wrapped
+.check_wrapped_flag:
+    cmp     byte [row_wrapped + rsi], 0
+    jz      .prev_fail
+.is_prev_wrapped:
+    mov     edi, [term_cols]
+    dec     edi
+    mov     eax, 1
+    ret
+.prev_fail:
+    inc     esi
+.cannot_prev:
+    xor     eax, eax
+    ret
+
+step_next_cell:
+    lea     eax, [edi + 1]
+    cmp     eax, [term_cols]
+    jae     .next_row
+    mov     edi, eax
+    mov     eax, 1
+    ret
+.next_row:
+    lea     edx, [esi + 1]
+    cmp     edx, [term_rows]
+    jae     .cannot_next
+    mov     rax, [vis_row_ptrs + rsi*8]
+    mov     rdx, [vis_row_ptrs + rdx*8]
+    test    rax, rax
+    jz      .check_wrapped_next
+    test    rdx, rdx
+    jz      .check_wrapped_next
+    mov     ecx, [term_cols]
+    shl     ecx, 4
+    add     rax, rcx
+    cmp     rdx, rax
+    je      .is_next_wrapped
+.check_wrapped_next:
+    cmp     byte [row_wrapped + rsi], 0
+    jz      .cannot_next
+.is_next_wrapped:
+    inc     esi
+    xor     edi, edi
+    mov     eax, 1
+    ret
+.cannot_next:
+    xor     eax, eax
+    ret
+
+term_find_url_at:
+    cmp     edi, [term_cols]
+    jae     .early_fail
+    cmp     esi, [term_rows]
+    jae     .early_fail
+    cmp     ecx, 16
+    jbe     .early_fail
+
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rbp
+
+    mov     r12d, edi
+    mov     r13d, esi
+    mov     r14, rdx
+    mov     r15d, ecx
+
+    call    build_vis_rows
+
+    mov     edi, r12d
+    mov     esi, r13d
+    call    get_cell_char
+    call    is_url_char
+    test    eax, eax
+    jz      .fail
+
+    mov     ebx, r12d
+    mov     ebp, r13d
+
+.scan_back:
+    mov     edi, ebx
+    mov     esi, ebp
+    call    step_prev_cell
+    test    eax, eax
+    jz      .start_found
+    push    rdi
+    push    rsi
+    call    get_cell_char
+    call    is_url_char
+    test    eax, eax
+    jz      .pop_stop
+    pop     rbp
+    pop     rbx
+    jmp     .scan_back
+
+.pop_stop:
+    add     rsp, 16
+.start_found:
+
+    xor     r8d, r8d
+    mov     r9d, -1
+
+.scan_fwd:
+    cmp     ebx, r12d
+    jne     .not_click
+    cmp     ebp, r13d
+    jne     .not_click
+    mov     r9d, r8d
+
+.not_click:
+    mov     edi, ebx
+    mov     esi, ebp
+    call    get_cell_char
+    mov     r10d, eax
+    call    is_url_char
+    test    eax, eax
+    jz      .fwd_done
+
+    mov     [r14 + r8], r10b
+    inc     r8d
+    lea     eax, [r15d - 2]
+    cmp     r8d, eax
+    jae     .fwd_done
+
+    mov     edi, ebx
+    mov     esi, ebp
+    call    step_next_cell
+    test    eax, eax
+    jz      .fwd_done
+    mov     ebx, edi
+    mov     ebp, esi
+    jmp     .scan_fwd
+
+.fwd_done:
+    test    r9d, r9d
+    js      .fail
+    cmp     r8d, 10
+    jb      .fail
+
+    xor     ecx, ecx
+.search_scheme:
+    lea     eax, [ecx + 7]
+    cmp     eax, r8d
+    ja      .fail
+
+    cmp     byte [r14 + rcx], 'h'
+    jne     .next_scheme_idx
+    cmp     byte [r14 + rcx + 1], 't'
+    jne     .next_scheme_idx
+    cmp     byte [r14 + rcx + 2], 't'
+    jne     .next_scheme_idx
+    cmp     byte [r14 + rcx + 3], 'p'
+    jne     .next_scheme_idx
+    cmp     byte [r14 + rcx + 4], ':'
+    jne     .check_https
+    cmp     byte [r14 + rcx + 5], '/'
+    jne     .next_scheme_idx
+    cmp     byte [r14 + rcx + 6], '/'
+    jne     .next_scheme_idx
+    jmp     .scheme_found
+
+.check_https:
+    lea     eax, [ecx + 8]
+    cmp     eax, r8d
+    ja      .next_scheme_idx
+    cmp     byte [r14 + rcx + 4], 's'
+    jne     .next_scheme_idx
+    cmp     byte [r14 + rcx + 5], ':'
+    jne     .next_scheme_idx
+    cmp     byte [r14 + rcx + 6], '/'
+    jne     .next_scheme_idx
+    cmp     byte [r14 + rcx + 7], '/'
+    jne     .next_scheme_idx
+    jmp     .scheme_found
+
+.next_scheme_idx:
+    inc     ecx
+    jmp     .search_scheme
+
+.scheme_found:
+    cmp     r9d, ecx
+    jb      .fail
+
+    lea     edx, [r8d - 1]
+.trim_loop:
+    cmp     edx, ecx
+    jle     .fail
+    movzx   eax, byte [r14 + rdx]
+    cmp     al, '.'
+    je      .do_trim
+    cmp     al, ','
+    je      .do_trim
+    cmp     al, ';'
+    je      .do_trim
+    cmp     al, ':'
+    je      .do_trim
+    cmp     al, '!'
+    je      .do_trim
+    cmp     al, '?'
+    je      .do_trim
+    cmp     al, '>'
+    je      .do_trim
+    cmp     al, 34
+    je      .do_trim
+    cmp     al, 39
+    je      .do_trim
+    cmp     al, ')'
+    je      .trim_paren
+    cmp     al, ']'
+    je      .trim_bracket
+    jmp     .trim_done
+
+.trim_paren:
+    push    rdx
+    push    rcx
+    xor     eax, eax
+    xor     r10d, r10d
+.count_paren:
+    cmp     ecx, edx
+    ja      .counted_paren
+    cmp     byte [r14 + rcx], '('
+    jne     .not_open_p
+    inc     eax
+.not_open_p:
+    cmp     byte [r14 + rcx], ')'
+    jne     .not_close_p
+    inc     r10d
+.not_close_p:
+    inc     ecx
+    jmp     .count_paren
+.counted_paren:
+    pop     rcx
+    pop     rdx
+    cmp     eax, r10d
+    jae     .trim_done
+    jmp     .do_trim
+
+.trim_bracket:
+    push    rdx
+    push    rcx
+    xor     eax, eax
+    xor     r10d, r10d
+.count_bracket:
+    cmp     ecx, edx
+    ja      .counted_bracket
+    cmp     byte [r14 + rcx], '['
+    jne     .not_open_b
+    inc     eax
+.not_open_b:
+    cmp     byte [r14 + rcx], ']'
+    jne     .not_close_b
+    inc     r10d
+.not_close_b:
+    inc     ecx
+    jmp     .count_bracket
+.counted_bracket:
+    pop     rcx
+    pop     rdx
+    cmp     eax, r10d
+    jae     .trim_done
+
+.do_trim:
+    dec     edx
+    jmp     .trim_loop
+
+.trim_done:
+    cmp     r9d, edx
+    ja      .fail
+
+    mov     eax, edx
+    sub     eax, ecx
+    inc     eax
+    cmp     eax, 10
+    jb      .fail
+    mov     r8d, eax
+
+    test    ecx, ecx
+    jz      .null_term
+    xor     esi, esi
+.shift_loop:
+    cmp     esi, r8d
+    jae     .null_term
+    lea     edi, [ecx + esi]
+    mov     al, [r14 + rdi]
+    mov     [r14 + rsi], al
+    inc     esi
+    jmp     .shift_loop
+
+.null_term:
+    mov     byte [r14 + r8], 0
+    mov     eax, r8d
+    jmp     .done
+
+.fail:
+    xor     eax, eax
+.done:
+    pop     rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+.early_fail:
+    xor     eax, eax
     ret
