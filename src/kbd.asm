@@ -52,7 +52,6 @@ extern write_all
 %define KEY_D           32
 %define KEY_F           33
 %define KEY_G           34
-%define KEY_H           35
 %define KEY_J           36
 %define KEY_K           37
 %define KEY_L           38
@@ -72,8 +71,36 @@ extern write_all
 %define KEY_DOT         52
 %define KEY_SLASH       53
 %define KEY_RIGHTSHIFT  54
+%define KEY_KPASTERISK  55
 %define KEY_LEFTALT     56
 %define KEY_SPACE       57
+%define KEY_F1          59
+%define KEY_F2          60
+%define KEY_F3          61
+%define KEY_F4          62
+%define KEY_F5          63
+%define KEY_F6          64
+%define KEY_F7          65
+%define KEY_F8          66
+%define KEY_F9          67
+%define KEY_F10         68
+%define KEY_KP7         71
+%define KEY_KP8         72
+%define KEY_KP9         73
+%define KEY_KPMINUS     74
+%define KEY_KP4         75
+%define KEY_KP5         76
+%define KEY_KP6         77
+%define KEY_KPPLUS      78
+%define KEY_KP1         79
+%define KEY_KP2         80
+%define KEY_KP3         81
+%define KEY_KP0         82
+%define KEY_KPDOT       83
+%define KEY_F11         87
+%define KEY_F12         88
+%define KEY_KPENTER     96
+%define KEY_KPSLASH     98
 %define KEY_HOME        102
 %define KEY_UP          103
 %define KEY_PAGEUP      104
@@ -110,19 +137,47 @@ map_shift:
     db 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0, '|'
     db 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0, '*', 0, ' '
 
+map_ru_norm:
+    dw 0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 127, 9
+    dw 0x0439, 0x0446, 0x0443, 0x043A, 0x0435, 0x043D, 0x0433, 0x0448, 0x0449, 0x0437, 0x0445, 0x044A, 13, 0
+    dw 0x0444, 0x044B, 0x0432, 0x0430, 0x043F, 0x0440, 0x043E, 0x043B, 0x0434, 0x0436, 0x044D, 0x0451, 0, '\'
+    dw 0x044F, 0x0447, 0x0441, 0x043C, 0x0438, 0x0442, 0x044C, 0x0431, 0x044E, '.', 0, '*', 0, ' '
+
+map_ru_shift:
+    dw 0, 27, '!', '"', 0x2116, ';', '%', ':', '?', '*', '(', ')', '_', '+', 127, 9
+    dw 0x0419, 0x0426, 0x0423, 0x041A, 0x0415, 0x041D, 0x0413, 0x0428, 0x0429, 0x0417, 0x0425, 0x042A, 13, 0
+    dw 0x0424, 0x042B, 0x0412, 0x0410, 0x041F, 0x0420, 0x041E, 0x041B, 0x0414, 0x0416, 0x042D, 0x0401, 0, '/'
+    dw 0x042F, 0x0427, 0x0421, 0x041C, 0x0418, 0x0422, 0x042C, 0x0411, 0x042E, ',', 0, '*', 0, ' '
+
+map_kp:
+    db '7', '8', '9', '-', '4', '5', '6', '+', '1', '2', '3', '0', '.'
+
 seq_up:         db 27, '[', 'A'
 seq_down:       db 27, '[', 'B'
 seq_right:      db 27, '[', 'C'
 seq_left:       db 27, '[', 'D'
 seq_home:       db 27, '[', 'H'
 seq_end:        db 27, '[', 'F'
+seq_f1:         db 27, 'O', 'P'
+seq_f2:         db 27, 'O', 'Q'
+seq_f3:         db 27, 'O', 'R'
+seq_f4:         db 27, 'O', 'S'
 seq_ctrl_right: db 27, '[', '1', ';', '5', 'C'
 seq_ctrl_left:  db 27, '[', '1', ';', '5', 'D'
 seq_ctrl_up:    db 27, '[', '1', ';', '5', 'A'
 seq_ctrl_down:  db 27, '[', '1', ';', '5', 'B'
+seq_insert:     db 27, '[', '2', '~'
 seq_delete:     db 27, '[', '3', '~'
 seq_pageup:     db 27, '[', '5', '~'
 seq_pagedown:   db 27, '[', '6', '~'
+seq_f5:         db 27, '[', '1', '5', '~'
+seq_f6:         db 27, '[', '1', '7', '~'
+seq_f7:         db 27, '[', '1', '8', '~'
+seq_f8:         db 27, '[', '1', '9', '~'
+seq_f9:         db 27, '[', '2', '0', '~'
+seq_f10:        db 27, '[', '2', '1', '~'
+seq_f11:        db 27, '[', '2', '3', '~'
+seq_f12:        db 27, '[', '2', '4', '~'
 
 wl_copy_path:   db "/usr/bin/wl-copy", 0
 wl_paste_path:  db "/usr/bin/wl-paste", 0
@@ -144,6 +199,7 @@ kbd_handle_key:
     jz      .ret
 
     mov     eax, [mod_depressed]
+    or      eax, [mod_latched]
 
     test    eax, 1
     jz      .not_shift_special
@@ -193,33 +249,95 @@ kbd_handle_key:
     je      .send_home
     cmp     edi, KEY_END
     je      .send_end
+    cmp     edi, KEY_INSERT
+    je      .send_insert
     cmp     edi, KEY_DELETE
     je      .send_delete
     cmp     edi, KEY_PAGEUP
     je      .send_pageup
     cmp     edi, KEY_PAGEDOWN
     je      .send_pagedown
+    cmp     edi, KEY_F1
+    je      .send_f1
+    cmp     edi, KEY_F2
+    je      .send_f2
+    cmp     edi, KEY_F3
+    je      .send_f3
+    cmp     edi, KEY_F4
+    je      .send_f4
+    cmp     edi, KEY_F5
+    je      .send_f5
+    cmp     edi, KEY_F6
+    je      .send_f6
+    cmp     edi, KEY_F7
+    je      .send_f7
+    cmp     edi, KEY_F8
+    je      .send_f8
+    cmp     edi, KEY_F9
+    je      .send_f9
+    cmp     edi, KEY_F10
+    je      .send_f10
+    cmp     edi, KEY_F11
+    je      .send_f11
+    cmp     edi, KEY_F12
+    je      .send_f12
+
+    cmp     edi, KEY_KPENTER
+    je      .send_kpenter
+    cmp     edi, KEY_KPSLASH
+    je      .send_kpslash
+    cmp     edi, KEY_KP7
+    jb      .not_kp
+    cmp     edi, KEY_KPDOT
+    ja      .not_kp
+    sub     edi, KEY_KP7
+    lea     rdx, [map_kp]
+    movzx   eax, byte [rdx + rdi]
+    jmp     .write_one
+.not_kp:
 
     cmp     edi, 58
     jae     .ret
 
+    mov     ecx, [mod_depressed]
+    or      ecx, [mod_latched]
+    test    ecx, 4
+    jnz     .us_layout
+
+    cmp     dword [mod_group], 0
+    jne     .ru_layout
+
+.us_layout:
     mov     eax, [mod_depressed]
-    test    eax, 1
-    jnz     .with_shift
-
+    or      eax, [mod_latched]
+    and     eax, 1
     lea     rdx, [map_norm]
-    movzx   eax, byte [rdx + rdi]
-    jmp     .got_char
-
-.with_shift:
+    test    eax, eax
+    jz      .us_check_caps
     lea     rdx, [map_shift]
+.us_check_caps:
     movzx   eax, byte [rdx + rdi]
+    test    byte [mod_locked], 2
+    jz      .got_us_char
+    cmp     al, 'a'
+    jb      .us_caps_upper
+    cmp     al, 'z'
+    ja      .got_us_char
+    sub     al, 32
+    jmp     .got_us_char
+.us_caps_upper:
+    cmp     al, 'A'
+    jb      .got_us_char
+    cmp     al, 'Z'
+    ja      .got_us_char
+    add     al, 32
 
-.got_char:
+.got_us_char:
     test    al, al
     jz      .ret
 
     mov     ecx, [mod_depressed]
+    or      ecx, [mod_latched]
     test    ecx, 4
     jz      .check_alt
 
@@ -267,6 +385,7 @@ kbd_handle_key:
 
 .check_alt:
     mov     ecx, [mod_depressed]
+    or      ecx, [mod_latched]
     test    ecx, 8
     jz      .write_one
     lea     rdx, [kbd_input_buf]
@@ -274,6 +393,102 @@ kbd_handle_key:
     mov     [rdx + 1], al
     mov     dword [kbd_input_len], 2
     ret
+
+.ru_layout:
+    mov     eax, [mod_depressed]
+    or      eax, [mod_latched]
+    and     eax, 1
+    lea     rdx, [map_ru_norm]
+    test    eax, eax
+    jz      .ru_check_caps
+    lea     rdx, [map_ru_shift]
+.ru_check_caps:
+    movzx   eax, word [rdx + rdi*2]
+    test    eax, eax
+    jz      .ret
+
+    test    byte [mod_locked], 2
+    jz      .encode_utf8
+    cmp     eax, 0x0430
+    jb      .ru_caps_check_upper
+    cmp     eax, 0x044F
+    ja      .ru_caps_check_yo
+    sub     eax, 0x20
+    jmp     .encode_utf8
+.ru_caps_check_yo:
+    cmp     eax, 0x0451
+    jne     .encode_utf8
+    mov     eax, 0x0401
+    jmp     .encode_utf8
+.ru_caps_check_upper:
+    cmp     eax, 0x0410
+    jb      .ru_caps_check_yo_up
+    cmp     eax, 0x042F
+    ja      .encode_utf8
+    add     eax, 0x20
+    jmp     .encode_utf8
+.ru_caps_check_yo_up:
+    cmp     eax, 0x0401
+    jne     .encode_utf8
+    mov     eax, 0x0451
+
+.encode_utf8:
+    lea     rdx, [kbd_input_buf]
+    xor     ecx, ecx
+    mov     r8d, [mod_depressed]
+    or      r8d, [mod_latched]
+    test    r8d, 8
+    jz      .no_ru_alt
+    mov     byte [rdx], 27
+    inc     rdx
+    inc     ecx
+.no_ru_alt:
+    cmp     eax, 0x80
+    jb      .utf8_1
+    cmp     eax, 0x800
+    jb      .utf8_2
+
+    mov     esi, eax
+    shr     esi, 12
+    and     sil, 0x0F
+    or      sil, 0xE0
+    mov     [rdx], sil
+    mov     esi, eax
+    shr     esi, 6
+    and     sil, 0x3F
+    or      sil, 0x80
+    mov     [rdx + 1], sil
+    and     al, 0x3F
+    or      al, 0x80
+    mov     [rdx + 2], al
+    add     ecx, 3
+    mov     [kbd_input_len], ecx
+    ret
+
+.utf8_2:
+    mov     esi, eax
+    shr     esi, 6
+    and     sil, 0x1F
+    or      sil, 0xC0
+    mov     [rdx], sil
+    and     al, 0x3F
+    or      al, 0x80
+    mov     [rdx + 1], al
+    add     ecx, 2
+    mov     [kbd_input_len], ecx
+    ret
+
+.utf8_1:
+    mov     [rdx], al
+    inc     ecx
+    mov     [kbd_input_len], ecx
+    ret
+
+.send_kpenter:
+    mov     al, 13
+    jmp     .write_one
+.send_kpslash:
+    mov     al, '/'
 
 .write_one:
     lea     rdx, [kbd_input_buf]
@@ -304,6 +519,18 @@ kbd_handle_key:
     jmp     .send_3
 .send_end:
     lea     rsi, [seq_end]
+    jmp     .send_3
+.send_f1:
+    lea     rsi, [seq_f1]
+    jmp     .send_3
+.send_f2:
+    lea     rsi, [seq_f2]
+    jmp     .send_3
+.send_f3:
+    lea     rsi, [seq_f3]
+    jmp     .send_3
+.send_f4:
+    lea     rsi, [seq_f4]
 .send_3:
     lea     rdi, [kbd_input_buf]
     mov     eax, [rsi]
@@ -313,6 +540,9 @@ kbd_handle_key:
     mov     dword [kbd_input_len], 3
     ret
 
+.send_insert:
+    lea     rsi, [seq_insert]
+    jmp     .send_4
 .send_delete:
     lea     rsi, [seq_delete]
     jmp     .send_4
@@ -326,6 +556,38 @@ kbd_handle_key:
     mov     eax, [rsi]
     mov     [rdi], eax
     mov     dword [kbd_input_len], 4
+    ret
+
+.send_f5:
+    lea     rsi, [seq_f5]
+    jmp     .send_5
+.send_f6:
+    lea     rsi, [seq_f6]
+    jmp     .send_5
+.send_f7:
+    lea     rsi, [seq_f7]
+    jmp     .send_5
+.send_f8:
+    lea     rsi, [seq_f8]
+    jmp     .send_5
+.send_f9:
+    lea     rsi, [seq_f9]
+    jmp     .send_5
+.send_f10:
+    lea     rsi, [seq_f10]
+    jmp     .send_5
+.send_f11:
+    lea     rsi, [seq_f11]
+    jmp     .send_5
+.send_f12:
+    lea     rsi, [seq_f12]
+.send_5:
+    lea     rdi, [kbd_input_buf]
+    mov     eax, [rsi]
+    mov     [rdi], eax
+    mov     al, [rsi + 4]
+    mov     [rdi + 4], al
+    mov     dword [kbd_input_len], 5
     ret
 
 .send_ctrl_right:

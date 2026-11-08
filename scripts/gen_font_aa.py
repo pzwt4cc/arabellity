@@ -2,15 +2,35 @@ import struct
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageFont, ImageDraw
 
-FONT_PATH = '/usr/share/fonts/TTF/JetBrainsMonoNerdFontMono-Medium.ttf'
+FONT_PATHS = [
+    ('/usr/share/fonts/TTF/JetBrainsMonoNerdFontMono-Medium.ttf', 15),
+    ('/usr/share/fonts/TTF/NotoSansMNerdFontMono-Medium.ttf', 15),
+    ('/usr/share/fonts/TTF/DejaVuSansMono.ttf', 14),
+    ('/usr/share/fonts/IosevkaNerdFont/IosevkaNerdFontMono-Medium.ttf', 16),
+    ('/usr/share/fonts/noto/NotoSansMath-Regular.ttf', 14),
+    ('/usr/share/fonts/noto/NotoSansSymbols-Medium.ttf', 14),
+    ('/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf', 14),
+]
+
 OUT_PATH = 'assets/nerd_font.bin'
 WIDTH = 10
 HEIGHT = 20
-FONT_SIZE = 15
 
-font = TTFont(FONT_PATH)
-cmap = font.getBestCmap()
-pfont = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+loaded_fonts = []
+for path, sz in FONT_PATHS:
+    try:
+        tt = TTFont(path)
+        cmap = tt.getBestCmap()
+        pf = ImageFont.truetype(path, sz)
+        loaded_fonts.append((cmap, pf))
+    except Exception as e:
+        print(f"Skipping {path}: {e}")
+
+all_codepoints = {}
+for cmap, pf in reversed(loaded_fonts):
+    for cp in cmap.keys():
+        if cp <= 0x10ffff and not (0xd800 <= cp <= 0xdfff):
+            all_codepoints[cp] = pf
 
 unique_glyphs = {}
 glyph_data = bytearray()
@@ -20,7 +40,7 @@ blank = bytes(WIDTH * HEIGHT)
 unique_glyphs[blank] = 0
 glyph_data.extend(blank)
 
-def render_char(ch, cp):
+def render_char(ch, cp, pfont):
     im = Image.new('L', (WIDTH, HEIGHT), 0)
     d = ImageDraw.Draw(im)
     d.text((0, 0), ch, font=pfont, fill=255)
@@ -31,15 +51,14 @@ def render_char(ch, cp):
                 raw[y * WIDTH + 9] = raw[y * WIDTH + 8]
     return bytes(raw)
 
-q_bytes = render_char('?', 63)
+q_bytes = render_char('?', 63, loaded_fonts[0][1])
 unique_glyphs[q_bytes] = 1
 glyph_data.extend(q_bytes)
 
-for cp in sorted(cmap.keys()):
-    if cp > 0x10ffff or (0xd800 <= cp <= 0xdfff):
-        continue
+for cp in sorted(all_codepoints.keys()):
+    pfont = all_codepoints[cp]
     try:
-        raw = render_char(chr(cp), cp)
+        raw = render_char(chr(cp), cp, pfont)
     except:
         continue
     if raw not in unique_glyphs:
