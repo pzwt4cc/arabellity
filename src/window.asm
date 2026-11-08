@@ -395,8 +395,18 @@ update_pty_winsize:
     mov     eax, [term_cols]
     mov     [winsize_struct + 2], ax
     mov     eax, [buf_w]
+    test    eax, eax
+    jnz     .w_ok
+    mov     eax, [term_cols]
+    imul    eax, [font_w]
+.w_ok:
     mov     [winsize_struct + 4], ax
     mov     eax, [buf_h]
+    test    eax, eax
+    jnz     .h_ok
+    mov     eax, [term_rows]
+    imul    eax, [font_h]
+.h_ok:
     mov     [winsize_struct + 6], ax
     mov     eax, SYS_IOCTL
     mov     esi, TIOCSWINSZ

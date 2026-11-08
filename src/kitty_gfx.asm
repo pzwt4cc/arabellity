@@ -15,6 +15,7 @@ extern term_cursor_col
 extern term_cursor_row
 extern term_cols
 extern term_rows
+extern term_scroll_up
 
 %define MAX_PLACEMENTS 64
 %define PLACE_SIZE 48
@@ -58,6 +59,7 @@ cur_id:                 resd 1
 cur_more:               resd 1
 cur_quiet:              resd 1
 cur_del_type:           resd 1
+cur_trans_type:         resd 1
 
 recv_in_progress:       resb 1
 recv_data_ptr:          resq 1
@@ -248,6 +250,7 @@ execute_kitty_command:
     mov     dword [cur_more], 0
     mov     dword [cur_quiet], 0
     mov     dword [cur_del_type], 0
+    mov     dword [cur_trans_type], 0
 
     lea     rsi, [apc_buf + 1]
 
@@ -270,6 +273,8 @@ execute_kitty_command:
     je      .val_action
     cmp     bl, 'd'
     je      .val_del
+    cmp     bl, 't'
+    je      .val_trans
     jmp     .val_num
 
 .val_action:
@@ -281,6 +286,12 @@ execute_kitty_command:
 .val_del:
     movzx   eax, byte [rsi]
     mov     [cur_del_type], eax
+    inc     rsi
+    jmp     .skip_val
+
+.val_trans:
+    movzx   eax, byte [rsi]
+    mov     [cur_trans_type], eax
     inc     rsi
     jmp     .skip_val
 
@@ -403,13 +414,35 @@ execute_kitty_command:
     mov     eax, [cur_id]
     call    format_num
 .query_no_id:
+    mov     eax, [cur_trans_type]
+    cmp     eax, 't'
+    je      .query_enosys
+    cmp     eax, 's'
+    je      .query_enosys
+    cmp     eax, 'f'
+    je      .query_enosys
+
     mov     byte [rdi], ';'
     mov     byte [rdi + 1], 'O'
     mov     byte [rdi + 2], 'K'
     mov     byte [rdi + 3], 27
     mov     byte [rdi + 4], '\'
     add     rdi, 5
+    jmp     .query_send
 
+.query_enosys:
+    mov     byte [rdi], ';'
+    mov     byte [rdi + 1], 'E'
+    mov     byte [rdi + 2], 'N'
+    mov     byte [rdi + 3], 'O'
+    mov     byte [rdi + 4], 'S'
+    mov     byte [rdi + 5], 'Y'
+    mov     byte [rdi + 6], 'S'
+    mov     byte [rdi + 7], 27
+    mov     byte [rdi + 8], '\'
+    add     rdi, 9
+
+.query_send:
     lea     rsi, [resp_buf]
     mov     rdx, rdi
     sub     rdx, rsi
@@ -593,6 +626,22 @@ execute_kitty_command:
     mov     [r13 + 40], eax
     mov     byte [r13 + 44], 1
     inc     dword [placement_count]
+
+    mov     ecx, [r13 + 40]
+    add     [term_cursor_row], ecx
+    mov     dword [term_cursor_col], 0
+.cursor_scroll_check:
+    mov     eax, [term_cursor_row]
+    mov     ecx, [term_rows]
+    dec     ecx
+    cmp     eax, ecx
+    jle     .cursor_ok
+    push    r13
+    call    term_scroll_up
+    pop     r13
+    dec     dword [term_cursor_row]
+    jmp     .cursor_scroll_check
+.cursor_ok:
 
     mov     eax, 1
     jmp     .ret

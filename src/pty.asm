@@ -6,7 +6,7 @@ global pty_spawn
 
 section .rodata
 ptmx_path:      db "/dev/ptmx", 0
-term_env_str:   db "TERM=xterm-256color", 0
+term_env_str:   db "TERM=xterm-kitty", 0
 
 section .text
 

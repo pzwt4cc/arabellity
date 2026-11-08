@@ -29,6 +29,7 @@ global term_zoom_reset
 global font_w
 global font_h
 global url_hover_active
+global term_scroll_up
 
 extern font_glyph_data
 extern font_glyph_for_char
@@ -65,6 +66,14 @@ extern kitty_gfx_render
 %define COLOR_SEL_FG   0xffffff
 %define PAD_X          8
 %define PAD_Y          8
+
+section .rodata
+da1_resp:       db 27, "[?62;c"
+da1_resp_len    equ $ - da1_resp
+osc_resp_10:    db 27, "]10;rgb:c9c9/d1d1/d9d9", 27, "\"
+osc_resp_10_len equ $ - osc_resp_10
+osc_resp_11:    db 27, "]11;rgb:0000/0000/0000", 27, "\"
+osc_resp_11_len equ $ - osc_resp_11
 
 section .data
 font_w:             dd 10
@@ -116,6 +125,8 @@ alt_wrap_next:      resb 1
 alt_cursor_col:     resd 1
 alt_cursor_row:     resd 1
 cpr_buf:            resb 32
+osc_buf:            resb 64
+osc_len:            resd 1
 
 row_wrapped:        resb MAX_ROWS
 alt_row_wrapped:    resb MAX_ROWS
@@ -779,6 +790,7 @@ term_process_char:
     ret
 
 .to_osc:
+    mov     dword [osc_len], 0
     mov     dword [esc_state], 3
     ret
 
@@ -791,6 +803,13 @@ term_process_char:
     je      .osc_end
     cmp     edi, 27
     je      .osc_to_esc
+    mov     eax, [osc_len]
+    cmp     eax, 60
+    jae     .osc_ignore
+    lea     rdx, [osc_buf]
+    mov     [rdx + rax], dil
+    inc     dword [osc_len]
+.osc_ignore:
     ret
 .osc_to_esc:
     mov     dword [esc_state], 4
@@ -802,6 +821,10 @@ term_process_char:
     jmp     .state_esc
 .osc_end:
     mov     dword [esc_state], 0
+    mov     eax, [osc_len]
+    lea     rdx, [osc_buf]
+    mov     byte [rdx + rax], 0
+    call    handle_osc_command
     ret
 
 .state_dcs:
@@ -1513,6 +1536,10 @@ term_handle_csi:
     je      .su
     cmp     edi, 'T'
     je      .sd
+    cmp     edi, 'c'
+    je      .da1
+    cmp     edi, 't'
+    je      .window_ops
     ret
 
 .csi_priv:
@@ -1520,6 +1547,51 @@ term_handle_csi:
     je      .priv_set
     cmp     edi, 'l'
     je      .priv_reset
+    cmp     edi, 'c'
+    je      .da1
+    ret
+
+.da1:
+    lea     rsi, [da1_resp]
+    mov     edx, da1_resp_len
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .da1_ret
+    call    write_all
+.da1_ret:
+    ret
+
+.window_ops:
+    lea     rdx, [csi_args]
+    mov     eax, [rdx]
+    cmp     eax, 14
+    je      .win_op_14
+    cmp     eax, 16
+    je      .win_op_16
+    cmp     eax, 18
+    je      .win_op_18
+    ret
+.win_op_14:
+    mov     edi, 4
+    mov     eax, [term_rows]
+    imul    eax, [font_h]
+    mov     esi, eax
+    mov     eax, [term_cols]
+    imul    eax, [font_w]
+    mov     edx, eax
+    call    send_size_report
+    ret
+.win_op_16:
+    mov     edi, 6
+    mov     esi, [font_h]
+    mov     edx, [font_w]
+    call    send_size_report
+    ret
+.win_op_18:
+    mov     edi, 8
+    mov     esi, [term_rows]
+    mov     edx, [term_cols]
+    call    send_size_report
     ret
 
 .priv_set:
@@ -2392,6 +2464,71 @@ send_cpr:
 .cpr_ret:
     pop     r12
     pop     rbx
+    ret
+
+send_size_report:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    mov     r12d, edi
+    mov     r13d, esi
+    mov     r14d, edx
+    lea     rdi, [cpr_buf]
+    mov     byte [rdi], 27
+    mov     byte [rdi + 1], '['
+    add     rdi, 2
+    mov     eax, r12d
+    call    format_u32
+    mov     byte [rdi], ';'
+    inc     rdi
+    mov     eax, r13d
+    call    format_u32
+    mov     byte [rdi], ';'
+    inc     rdi
+    mov     eax, r14d
+    call    format_u32
+    mov     byte [rdi], 't'
+    inc     rdi
+    lea     rsi, [cpr_buf]
+    mov     rdx, rdi
+    sub     rdx, rsi
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .ssr_ret
+    call    write_all
+.ssr_ret:
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+handle_osc_command:
+    lea     rsi, [osc_buf]
+    cmp     word [rsi], 0x3031
+    jne     .osc_not_10
+    cmp     word [rsi + 2], 0x3f3b
+    jne     .osc_not_10
+    lea     rsi, [osc_resp_10]
+    mov     edx, osc_resp_10_len
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .h_ret
+    call    write_all
+    ret
+.osc_not_10:
+    cmp     word [rsi], 0x3131
+    jne     .h_ret
+    cmp     word [rsi + 2], 0x3f3b
+    jne     .h_ret
+    lea     rsi, [osc_resp_11]
+    mov     edx, osc_resp_11_len
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .h_ret
+    call    write_all
+.h_ret:
     ret
 
 format_u32:
