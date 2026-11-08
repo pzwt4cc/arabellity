@@ -7,12 +7,13 @@ BIN      := $(BUILD)/$(NAME)
 ASM      := nasm
 ASMFLAGS := -f elf64 -g -F dwarf -I$(SRC_DIR)/ -DAPP_NAME='"$(NAME)"'
 LD       := ld
+RUSTC    := rustc
 
 SRCS     := $(wildcard $(SRC_DIR)/*.asm)
 INCS     := $(wildcard $(SRC_DIR)/*.inc)
 OBJS     := $(patsubst $(SRC_DIR)/%.asm,$(BUILD)/%.o,$(SRCS))
 
-.PHONY: all run clean debug
+.PHONY: all run clean debug font
 
 all: $(BIN)
 
@@ -24,6 +25,10 @@ $(BUILD)/%.o: $(SRC_DIR)/%.asm $(INCS) | $(BUILD)
 
 $(BUILD):
 	mkdir -p $@
+
+font: | $(BUILD)
+	$(RUSTC) -O scripts/gen_font.rs -lfreetype -o $(BUILD)/gen_font
+	./$(BUILD)/gen_font
 
 run: $(BIN)
 	./$(BIN)
