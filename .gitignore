@@ -1,3 +1,21 @@
-skills/
+# Build outputs
 build/
 *.o
+*.tar.gz
+*.pkg.tar.*
+
+# Makepkg build directories
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/arabellity/
+packaging/arch/*.tar.gz
+packaging/arch/*.pkg.tar.*
+
+# Editor and temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Agent skills
+skills/
