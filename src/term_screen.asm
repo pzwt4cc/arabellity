@@ -946,6 +946,7 @@ term_process_char:
 
 .reset:
     call    term_init
+    call    kitty_gfx_clear
     ret
 
 .linefeed:
@@ -2260,6 +2261,10 @@ term_handle_csi:
     ret
 .ed_all:
     call    term_clear_grid
+    cmp     byte [in_alt_screen], 0
+    jne     .ed_all_ret
+    call    kitty_gfx_clear
+.ed_all_ret:
     ret
 .ed_above:
     mov     eax, [term_cursor_row]
@@ -2896,10 +2901,28 @@ term_render:
 
     call    build_vis_rows
 
+    push    r12
+    push    r13
+    push    r14
+    mov     rdi, r12
+    mov     esi, r13d
+    mov     edx, r14d
+    mov     ecx, [font_w]
+    mov     r8d, [font_h]
+    mov     r9d, [cfg_pad_x]
+    sub     rsp, 8
+    mov     eax, [cfg_pad_y]
+    mov     [rsp], rax
+    call    kitty_gfx_render
+    add     rsp, 8
+    pop     r14
+    pop     r13
+    pop     r12
+
     xor     r15d, r15d
 .row_loop:
     cmp     r15d, [term_rows]
-    jae     .draw_gfx
+    jae     .draw_cursor
     mov     rax, [vis_row_ptrs + r15*8]
     mov     [cur_row_ptr], rax
     mov     eax, [vis_row_cols + r15*4]
@@ -3031,25 +3054,6 @@ term_render:
 .row_next:
     inc     r15d
     jmp     .row_loop
-
-.draw_gfx:
-    push    r12
-    push    r13
-    push    r14
-    mov     rdi, r12
-    mov     esi, r13d
-    mov     edx, r14d
-    mov     ecx, [font_w]
-    mov     r8d, [font_h]
-    mov     r9d, [cfg_pad_x]
-    sub     rsp, 8
-    mov     eax, [cfg_pad_y]
-    mov     [rsp], rax
-    call    kitty_gfx_render
-    add     rsp, 8
-    pop     r14
-    pop     r13
-    pop     r12
 
 .draw_cursor:
     cmp     dword [scroll_offset], 0

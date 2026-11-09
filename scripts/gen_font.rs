@@ -11,7 +11,7 @@ const BPG: usize = WIDTH * HEIGHT;
 const FT_LOAD_RENDER: c_int = 4;
 
 const FONT_PATHS: &[(&str, c_uint)] = &[
-    ("/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Medium.ttf", 15),
+    ("/usr/share/fonts/TTF/JetBrainsMonoNerdFontMono-Medium.ttf", 15),
     ("/usr/share/fonts/TTF/NotoSansMNerdFontMono-Medium.ttf", 15),
     ("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 14),
     ("/usr/share/fonts/IosevkaNerdFont/IosevkaNerdFontMono-Medium.ttf", 16),
@@ -72,19 +72,51 @@ unsafe fn render_char(face: *mut u8, cp: u32) -> Option<[u8; BPG]> {
     let mut raw = [0u8; BPG];
     if !bm_buf.is_null() && bm_rows > 0 && bm_width > 0 {
         let y_off = ascender - bm_top;
-        let x_off = bm_left;
-        for row in 0..bm_rows {
-            let dst_y = y_off + row;
-            if dst_y < 0 || dst_y >= HEIGHT as i32 {
-                continue;
+        let mut x_off = bm_left;
+
+        if bm_width <= WIDTH as i32 {
+            if x_off < 0 {
+                x_off = 0;
             }
-            for col in 0..bm_width {
-                let dst_x = x_off + col;
-                if dst_x < 0 || dst_x >= WIDTH as i32 {
+            if x_off + bm_width > WIDTH as i32 {
+                x_off = (WIDTH as i32 - bm_width).max(0);
+            }
+        }
+
+        let scale = if bm_width > WIDTH as i32 || bm_rows > HEIGHT as i32 {
+            (bm_width as f32 / WIDTH as f32).max(bm_rows as f32 / HEIGHT as f32)
+        } else {
+            1.0
+        };
+
+        if scale > 1.0 {
+            let target_w = ((bm_width as f32 / scale).round() as i32).clamp(1, WIDTH as i32);
+            let target_h = ((bm_rows as f32 / scale).round() as i32).clamp(1, HEIGHT as i32);
+            let dst_x0 = (WIDTH as i32 - target_w) / 2;
+            let dst_y0 = (HEIGHT as i32 - target_h) / 2;
+
+            for r in 0..target_h {
+                let src_r = ((r as f32 * scale).round() as i32).clamp(0, bm_rows - 1);
+                for c in 0..target_w {
+                    let src_c = ((c as f32 * scale).round() as i32).clamp(0, bm_width - 1);
+                    let val = *bm_buf.offset((src_r * bm_pitch + src_c) as isize);
+                    raw[(dst_y0 + r) as usize * WIDTH + (dst_x0 + c) as usize] = val;
+                }
+            }
+        } else {
+            for row in 0..bm_rows {
+                let dst_y = y_off + row;
+                if dst_y < 0 || dst_y >= HEIGHT as i32 {
                     continue;
                 }
-                let val = *bm_buf.offset((row * bm_pitch + col) as isize);
-                raw[dst_y as usize * WIDTH + dst_x as usize] = val;
+                for col in 0..bm_width {
+                    let dst_x = x_off + col;
+                    if dst_x < 0 || dst_x >= WIDTH as i32 {
+                        continue;
+                    }
+                    let val = *bm_buf.offset((row * bm_pitch + col) as isize);
+                    raw[dst_y as usize * WIDTH + dst_x as usize] = val;
+                }
             }
         }
     }
@@ -109,6 +141,7 @@ unsafe fn render_ligature_slices(face: *mut u8, name: &str, cells: usize) -> Opt
     if FT_Load_Glyph(face, gid, FT_LOAD_RENDER) != 0 {
         return None;
     }
+
     let size_ptr = *(face.add(160) as *const *const u8);
     let ascender_26_6 = *(size_ptr.add(48) as *const c_long);
     let ascender = ((ascender_26_6 + 32) >> 6) as i32;
@@ -121,141 +154,144 @@ unsafe fn render_ligature_slices(face: *mut u8, name: &str, cells: usize) -> Opt
     let bm_left = *(glyph_ptr.add(192) as *const c_int);
     let bm_top = *(glyph_ptr.add(196) as *const c_int);
 
-    let full_w = cells * WIDTH;
-    let mut full = vec![0u8; full_w * HEIGHT];
+    let total_width = cells * WIDTH;
+    let mut canvas = vec![0u8; total_width * HEIGHT];
+
     if !bm_buf.is_null() && bm_rows > 0 && bm_width > 0 {
-        let base_x = (cells - 1) as i32 * WIDTH as i32 + bm_left;
-        let base_y = ascender - bm_top;
+        let y_off = ascender - bm_top;
+        let x_off = bm_left;
         for row in 0..bm_rows {
-            let dst_y = base_y + row;
+            let dst_y = y_off + row;
             if dst_y < 0 || dst_y >= HEIGHT as i32 {
                 continue;
             }
             for col in 0..bm_width {
-                let dst_x = base_x + col;
-                if dst_x < 0 || dst_x >= full_w as i32 {
+                let dst_x = x_off + col;
+                if dst_x < 0 || dst_x >= total_width as i32 {
                     continue;
                 }
                 let val = *bm_buf.offset((row * bm_pitch + col) as isize);
-                full[dst_y as usize * full_w + dst_x as usize] = val;
+                canvas[dst_y as usize * total_width + dst_x as usize] = val;
             }
         }
     }
 
     let mut slices = Vec::with_capacity(cells);
-    for cell_idx in 0..cells {
+    for c in 0..cells {
         let mut slice = [0u8; BPG];
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                slice[y * WIDTH + x] = full[y * full_w + (cell_idx * WIDTH + x)];
+        for row in 0..HEIGHT {
+            for col in 0..WIDTH {
+                slice[row * WIDTH + col] = canvas[row * total_width + (c * WIDTH + col)];
             }
         }
         slices.push(slice);
     }
+
     Some(slices)
 }
 
 fn main() {
+    let mut library: *mut c_void = ptr::null_mut();
     unsafe {
-        let mut lib: *mut c_void = ptr::null_mut();
-        assert_eq!(FT_Init_FreeType(&mut lib), 0, "Failed to init FreeType");
-
-        let mut faces: Vec<*mut u8> = Vec::new();
-        for &(path, sz) in FONT_PATHS {
-            let cpath = CString::new(path).unwrap();
-            let mut face: *mut u8 = ptr::null_mut();
-            if FT_New_Face(lib, cpath.as_ptr(), 0, &mut face) == 0 {
-                FT_Set_Pixel_Sizes(face, 0, sz);
-                faces.push(face);
-            } else {
-                eprintln!("Skipping {}", path);
-            }
-        }
-        assert!(!faces.is_empty(), "No fonts loaded");
-
-        let mut all_codepoints: BTreeMap<u32, *mut u8> = BTreeMap::new();
-        for &face in faces.iter().rev() {
-            let mut gindex: c_uint = 0;
-            let mut cp = FT_Get_First_Char(face, &mut gindex);
-            while gindex != 0 {
-                let cp32 = cp as u32;
-                if cp32 <= 0x10ffff && !(0xd800..=0xdfff).contains(&cp32) {
-                    all_codepoints.insert(cp32, face);
-                }
-                cp = FT_Get_Next_Char(face, cp, &mut gindex);
-            }
+        if FT_Init_FreeType(&mut library) != 0 {
+            eprintln!("Failed to init FreeType");
+            return;
         }
 
         let mut unique_glyphs: HashMap<[u8; BPG], u32> = HashMap::new();
         let mut glyph_data: Vec<u8> = Vec::new();
         let mut mapping: BTreeMap<u32, u32> = BTreeMap::new();
 
-        let blank = [0u8; BPG];
-        unique_glyphs.insert(blank, 0);
-        glyph_data.extend_from_slice(&blank);
+        let space_bitmap = [0u8; BPG];
+        unique_glyphs.insert(space_bitmap, 0);
+        glyph_data.extend_from_slice(&space_bitmap);
+        mapping.insert(32, 0);
 
-        let q_bytes = render_char(faces[0], b'?' as u32).unwrap_or(blank);
-        unique_glyphs.insert(q_bytes, 1);
-        glyph_data.extend_from_slice(&q_bytes);
-
-        for (&cp, &face) in &all_codepoints {
-            if let Some(raw) = render_char(face, cp) {
-                let idx = if let Some(&existing) = unique_glyphs.get(&raw) {
-                    existing
-                } else {
-                    let next_idx = unique_glyphs.len() as u32;
-                    unique_glyphs.insert(raw, next_idx);
-                    glyph_data.extend_from_slice(&raw);
-                    next_idx
-                };
-                mapping.insert(cp, idx);
+        for &(font_path, font_size) in FONT_PATHS {
+            let c_path = match CString::new(font_path) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let mut face: *mut u8 = ptr::null_mut();
+            if FT_New_Face(library, c_path.as_ptr(), 0, &mut face) != 0 {
+                eprintln!("Warning: could not open font {}", font_path);
+                continue;
             }
+
+            FT_Set_Pixel_Sizes(face, 0, font_size);
+
+            let mut gindex: c_uint = 0;
+            let mut char_code = FT_Get_First_Char(face, &mut gindex);
+            let mut count = 0;
+
+            while gindex != 0 {
+                let cp = char_code as u32;
+                if !mapping.contains_key(&cp) {
+                    if let Some(bitmap) = render_char(face, cp) {
+                        let next_idx = unique_glyphs.len() as u32;
+                        let idx = *unique_glyphs.entry(bitmap).or_insert_with(|| {
+                            glyph_data.extend_from_slice(&bitmap);
+                            next_idx
+                        });
+                        mapping.insert(cp, idx);
+                        count += 1;
+                    }
+                }
+                char_code = FT_Get_Next_Char(face, char_code, &mut gindex);
+            }
+
+            println!("Font {}: loaded {} new glyphs", font_path, count);
+            FT_Done_Face(face);
         }
 
-        mapping.insert(32, 0);
-        mapping.insert(63, 1);
-
-        let jb_face = faces[0];
-        for &(lig_name, cells, base_cp) in LIGATURES {
-            if let Some(slices) = render_ligature_slices(jb_face, lig_name, cells) {
-                for (i, slice) in slices.into_iter().enumerate() {
-                    let cp = base_cp + i as u32;
-                    let idx = if let Some(&existing) = unique_glyphs.get(&slice) {
-                        existing
-                    } else {
+        let c_jb = CString::new(FONT_PATHS[0].0).unwrap();
+        let mut jb_face: *mut u8 = ptr::null_mut();
+        if FT_New_Face(library, c_jb.as_ptr(), 0, &mut jb_face) == 0 {
+            FT_Set_Pixel_Sizes(jb_face, 0, FONT_PATHS[0].1);
+            for &(lig_name, cells, base_cp) in LIGATURES {
+                if let Some(slices) = render_ligature_slices(jb_face, lig_name, cells) {
+                    for (i, slice) in slices.into_iter().enumerate() {
+                        let cp = base_cp + i as u32;
                         let next_idx = unique_glyphs.len() as u32;
-                        unique_glyphs.insert(slice, next_idx);
-                        glyph_data.extend_from_slice(&slice);
-                        next_idx
-                    };
-                    mapping.insert(cp, idx);
+                        let idx = if let Some(&existing) = unique_glyphs.get(&slice) {
+                            existing
+                        } else {
+                            unique_glyphs.insert(slice, next_idx);
+                            glyph_data.extend_from_slice(&slice);
+                            next_idx
+                        };
+                        mapping.insert(cp, idx);
+                    }
+                } else {
+                    eprintln!("Warning: could not render ligature {}", lig_name);
                 }
-            } else {
-                eprintln!("Warning: could not render ligature {}", lig_name);
             }
+            FT_Done_Face(jb_face);
         }
 
         let glyph_count = unique_glyphs.len() as u32;
         let map_count = mapping.len() as u32;
         let out_path = "assets/fonts/nerd_font.bin";
+        let f = File::create(out_path).expect("Unable to create output file");
+        let mut w = BufWriter::new(f);
 
-        println!("Generating {}:", out_path);
-        println!("  Unique glyphs: {}", glyph_count);
-        println!("  Unicode mappings: {}", map_count);
+        w.write_all(&glyph_count.to_le_bytes()).unwrap();
+        w.write_all(&map_count.to_le_bytes()).unwrap();
+        w.write_all(&glyph_data).unwrap();
 
-        let mut f = BufWriter::new(File::create(out_path).expect("Failed to create output file"));
-        f.write_all(&glyph_count.to_le_bytes()).unwrap();
-        f.write_all(&map_count.to_le_bytes()).unwrap();
-        f.write_all(&glyph_data).unwrap();
         for (&cp, &idx) in &mapping {
-            f.write_all(&cp.to_le_bytes()).unwrap();
-            f.write_all(&idx.to_le_bytes()).unwrap();
+            w.write_all(&cp.to_le_bytes()).unwrap();
+            w.write_all(&idx.to_le_bytes()).unwrap();
         }
-        f.flush().unwrap();
 
-        for face in faces {
-            FT_Done_Face(face);
-        }
-        FT_Done_FreeType(lib);
+        w.flush().unwrap();
+        println!(
+            "Success! Generated {} unique glyphs, {} mappings. File size: {} KB",
+            glyph_count,
+            map_count,
+            (8 + glyph_data.len() + map_count as usize * 8) / 1024
+        );
+
+        FT_Done_FreeType(library);
     }
 }
