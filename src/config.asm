@@ -20,6 +20,7 @@ global cfg_blur
 global cfg_bg_pixel
 global cfg_scroll_lines
 global ansi_colors
+global parse_hex_color
 
 extern getenv
 extern streq

@@ -45,6 +45,7 @@ extern cfg_sel_bg
 extern cfg_sel_fg
 extern cfg_bg_pixel
 extern ansi_colors
+extern parse_hex_color
 extern kitty_gfx_init
 extern kitty_gfx_clear
 extern kitty_gfx_scroll_up
@@ -127,7 +128,7 @@ alt_wrap_next:      resb 1
 alt_cursor_col:     resd 1
 alt_cursor_row:     resd 1
 cpr_buf:            resb 32
-osc_buf:            resb 64
+osc_buf:            resb 512
 osc_len:            resd 1
 placeholder_diacritics_left: resd 1
 
@@ -826,7 +827,7 @@ term_process_char:
     cmp     edi, 27
     je      .osc_to_esc
     mov     eax, [osc_len]
-    cmp     eax, 60
+    cmp     eax, 500
     jae     .osc_ignore
     lea     rdx, [osc_buf]
     mov     [rdx + rax], dil
@@ -2642,25 +2643,102 @@ send_size_report:
 
 handle_osc_command:
     lea     rsi, [osc_buf]
-    cmp     word [rsi], 0x3031
-    jne     .osc_not_10
-    cmp     word [rsi + 2], 0x3f3b
-    jne     .osc_not_10
 
+    cmp     byte [rsi], '4'
+    jne     .check_10
+    cmp     byte [rsi + 1], ';'
+    je      .handle_osc_4
+
+.check_10:
+    cmp     word [rsi], 0x3031
+    jne     .check_11
+    cmp     byte [rsi + 2], ';'
+    jne     .h_ret
+    cmp     byte [rsi + 3], '?'
+    jne     .set_10
     mov     edi, [cfg_fg]
     mov     al, '0'
     call    send_osc_color_resp
     ret
+.set_10:
+    lea     rdi, [rsi + 3]
+    call    parse_hex_color
+    test    edx, edx
+    jz      .h_ret
+    mov     [cfg_fg], eax
+    ret
 
-.osc_not_10:
+.check_11:
     cmp     word [rsi], 0x3131
+    jne     .check_12
+    cmp     byte [rsi + 2], ';'
     jne     .h_ret
-    cmp     word [rsi + 2], 0x3f3b
-    jne     .h_ret
-
+    cmp     byte [rsi + 3], '?'
+    jne     .set_11
     mov     edi, [cfg_bg]
     mov     al, '1'
     call    send_osc_color_resp
+    ret
+.set_11:
+    lea     rdi, [rsi + 3]
+    cmp     byte [rdi], '['
+    jne     .parse_11_color
+.skip_bracket:
+    cmp     byte [rdi], 0
+    jz      .parse_11_color
+    cmp     byte [rdi], ']'
+    je      .after_bracket
+    inc     rdi
+    jmp     .skip_bracket
+.after_bracket:
+    inc     rdi
+.parse_11_color:
+    call    parse_hex_color
+    test    edx, edx
+    jz      .h_ret
+    mov     [cfg_bg], eax
+    or      eax, 0xff000000
+    mov     [cfg_bg_pixel], eax
+    ret
+
+.check_12:
+    cmp     word [rsi], 0x3231
+    jne     .h_ret
+    cmp     byte [rsi + 2], ';'
+    jne     .h_ret
+    lea     rdi, [rsi + 3]
+    call    parse_hex_color
+    test    edx, edx
+    jz      .h_ret
+    mov     [cfg_cursor], eax
+    ret
+
+.handle_osc_4:
+    add     rsi, 2
+    xor     eax, eax
+.osc_4_idx:
+    movzx   edx, byte [rsi]
+    sub     edx, '0'
+    cmp     edx, 9
+    ja      .osc_4_idx_done
+    imul    eax, 10
+    add     eax, edx
+    inc     rsi
+    jmp     .osc_4_idx
+.osc_4_idx_done:
+    cmp     byte [rsi], ';'
+    jne     .h_ret
+    inc     rsi
+    cmp     eax, 15
+    ja      .h_ret
+    push    rax
+    mov     rdi, rsi
+    call    parse_hex_color
+    pop     rcx
+    test    edx, edx
+    jz      .h_ret
+    lea     rdx, [ansi_colors]
+    mov     [rdx + rcx*4], eax
 .h_ret:
     ret
 
