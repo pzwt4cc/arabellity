@@ -53,10 +53,209 @@ extern "C" {
     fn FT_Load_Glyph(face: *mut u8, glyph_index: c_uint, load_flags: c_int) -> c_int;
 }
 
-unsafe fn render_char(face: *mut u8, cp: u32) -> Option<[u8; BPG]> {
-    if FT_Load_Char(face, cp as c_ulong, FT_LOAD_RENDER) != 0 {
+fn bilinear_scale(
+    bm_buf: *const u8,
+    bm_width: i32,
+    bm_rows: i32,
+    bm_pitch: i32,
+    target_w: i32,
+    target_h: i32,
+) -> Vec<u8> {
+    let mut out = vec![0u8; (target_w * target_h) as usize];
+    let scale_x = bm_width as f32 / target_w as f32;
+    let scale_y = bm_rows as f32 / target_h as f32;
+    for r in 0..target_h {
+        let src_y = (r as f32 + 0.5) * scale_y - 0.5;
+        let y0 = (src_y.floor() as i32).clamp(0, bm_rows - 1);
+        let y1 = (y0 + 1).clamp(0, bm_rows - 1);
+        let wy = (src_y - y0 as f32).clamp(0.0, 1.0);
+        for c in 0..target_w {
+            let src_x = (c as f32 + 0.5) * scale_x - 0.5;
+            let x0 = (src_x.floor() as i32).clamp(0, bm_width - 1);
+            let x1 = (x0 + 1).clamp(0, bm_width - 1);
+            let wx = (src_x - x0 as f32).clamp(0.0, 1.0);
+
+            unsafe {
+                let p00 = *bm_buf.offset((y0 * bm_pitch + x0) as isize) as f32;
+                let p01 = *bm_buf.offset((y0 * bm_pitch + x1) as isize) as f32;
+                let p10 = *bm_buf.offset((y1 * bm_pitch + x0) as isize) as f32;
+                let p11 = *bm_buf.offset((y1 * bm_pitch + x1) as isize) as f32;
+
+                let top_val = (1.0 - wx) * p00 + wx * p01;
+                let bot_val = (1.0 - wx) * p10 + wx * p11;
+                let val = (1.0 - wy) * top_val + wy * bot_val;
+                out[(r * target_w + c) as usize] = val.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    out
+}
+
+fn render_geometric(cp: u32) -> Option<[u8; BPG]> {
+    let mut raw = [0u8; BPG];
+    if (0x2580..=0x259F).contains(&cp) {
+        if cp == 0x2588 {
+            return Some([255u8; BPG]);
+        }
+        if (0x2581..=0x2587).contains(&cp) {
+            let h = [2, 5, 8, 10, 12, 15, 18][(cp - 0x2581) as usize];
+            for y in (HEIGHT - h)..HEIGHT {
+                for x in 0..WIDTH {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            return Some(raw);
+        }
+        if cp == 0x2580 {
+            for y in 0..10 {
+                for x in 0..WIDTH {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            return Some(raw);
+        }
+        if (0x2589..=0x258F).contains(&cp) {
+            let w = [9, 8, 6, 5, 4, 2, 1][(cp - 0x2589) as usize];
+            for y in 0..HEIGHT {
+                for x in 0..w {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            return Some(raw);
+        }
+        if cp == 0x2590 {
+            for y in 0..HEIGHT {
+                for x in 5..WIDTH {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            return Some(raw);
+        }
+        if cp == 0x2594 {
+            for y in 0..2 {
+                for x in 0..WIDTH {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            return Some(raw);
+        }
+        if cp == 0x2595 {
+            for y in 0..HEIGHT {
+                raw[y * WIDTH + 9] = 255;
+            }
+            return Some(raw);
+        }
+        if cp == 0x2591 {
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    if (x % 2 == 0) && (y % 2 == 0) {
+                        raw[y * WIDTH + x] = 255;
+                    }
+                }
+            }
+            return Some(raw);
+        }
+        if cp == 0x2592 {
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    if (x + y) % 2 == 0 {
+                        raw[y * WIDTH + x] = 255;
+                    }
+                }
+            }
+            return Some(raw);
+        }
+        if cp == 0x2593 {
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    if !((x % 2 == 0) && (y % 2 == 0)) {
+                        raw[y * WIDTH + x] = 255;
+                    }
+                }
+            }
+            return Some(raw);
+        }
+        let quad_mask: Option<u8> = match cp {
+            0x2596 => Some(4),
+            0x2597 => Some(8),
+            0x2598 => Some(1),
+            0x2599 => Some(1 | 4 | 8),
+            0x259A => Some(1 | 8),
+            0x259B => Some(1 | 2 | 4),
+            0x259C => Some(1 | 2 | 8),
+            0x259D => Some(2),
+            0x259E => Some(2 | 4),
+            0x259F => Some(2 | 4 | 8),
+            _ => None,
+        };
+        if let Some(mask) = quad_mask {
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    let bit = if y < 10 && x < 5 {
+                        1
+                    } else if y < 10 && x >= 5 {
+                        2
+                    } else if y >= 10 && x < 5 {
+                        4
+                    } else {
+                        8
+                    };
+                    if mask & bit != 0 {
+                        raw[y * WIDTH + x] = 255;
+                    }
+                }
+            }
+            return Some(raw);
+        }
+    }
+    if cp == 0x2500 {
+        for y in 9..=10 {
+            for x in 0..WIDTH {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        return Some(raw);
+    }
+    if cp == 0x2501 {
+        for y in 8..=11 {
+            for x in 0..WIDTH {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        return Some(raw);
+    }
+    if cp == 0x2502 {
+        for y in 0..HEIGHT {
+            for x in 4..=5 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        return Some(raw);
+    }
+    if cp == 0x2503 {
+        for y in 0..HEIGHT {
+            for x in 3..=6 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        return Some(raw);
+    }
+    None
+}
+
+unsafe fn render_char(face: *mut u8, cp: u32, default_size: c_uint) -> Option<[u8; BPG]> {
+    let is_icon = (0xE000..=0xF8FF).contains(&cp) || (0xF0000..=0x10FFFF).contains(&cp);
+    if is_icon {
+        FT_Set_Pixel_Sizes(face, 0, 18);
+    }
+    let load_res = FT_Load_Char(face, cp as c_ulong, FT_LOAD_RENDER);
+    if is_icon {
+        FT_Set_Pixel_Sizes(face, 0, default_size);
+    }
+    if load_res != 0 {
         return None;
     }
+
     let size_ptr = *(face.add(160) as *const *const u8);
     let ascender_26_6 = *(size_ptr.add(48) as *const c_long);
     let ascender = ((ascender_26_6 + 32) >> 6) as i32;
@@ -95,12 +294,11 @@ unsafe fn render_char(face: *mut u8, cp: u32) -> Option<[u8; BPG]> {
             let dst_x0 = (WIDTH as i32 - target_w) / 2;
             let dst_y0 = (HEIGHT as i32 - target_h) / 2;
 
+            let scaled = bilinear_scale(bm_buf, bm_width, bm_rows, bm_pitch, target_w, target_h);
             for r in 0..target_h {
-                let src_r = ((r as f32 * scale).round() as i32).clamp(0, bm_rows - 1);
                 for c in 0..target_w {
-                    let src_c = ((c as f32 * scale).round() as i32).clamp(0, bm_width - 1);
-                    let val = *bm_buf.offset((src_r * bm_pitch + src_c) as isize);
-                    raw[(dst_y0 + r) as usize * WIDTH + (dst_x0 + c) as usize] = val;
+                    raw[(dst_y0 + r) as usize * WIDTH + (dst_x0 + c) as usize] =
+                        scaled[(r * target_w + c) as usize];
                 }
             }
         } else {
@@ -123,8 +321,19 @@ unsafe fn render_char(face: *mut u8, cp: u32) -> Option<[u8; BPG]> {
 
     if (0x2500..=0x257F).contains(&cp) {
         for y in 0..HEIGHT {
-            if raw[y * WIDTH + 8] > 128 {
-                raw[y * WIDTH + 9] = raw[y * WIDTH + 8];
+            if raw[y * WIDTH + 1] > 64 {
+                raw[y * WIDTH + 0] = raw[y * WIDTH + 0].max(raw[y * WIDTH + 1]);
+            }
+            if raw[y * WIDTH + 8] > 64 {
+                raw[y * WIDTH + 9] = raw[y * WIDTH + 9].max(raw[y * WIDTH + 8]);
+            }
+        }
+        for x in 0..WIDTH {
+            if raw[1 * WIDTH + x] > 64 {
+                raw[0 * WIDTH + x] = raw[0 * WIDTH + x].max(raw[1 * WIDTH + x]);
+            }
+            if raw[18 * WIDTH + x] > 64 {
+                raw[19 * WIDTH + x] = raw[19 * WIDTH + x].max(raw[18 * WIDTH + x]);
             }
         }
     }
@@ -207,6 +416,27 @@ fn main() {
         glyph_data.extend_from_slice(&space_bitmap);
         mapping.insert(32, 0);
 
+        for cp in 0x2580..=0x259F {
+            if let Some(bitmap) = render_geometric(cp) {
+                let next_idx = unique_glyphs.len() as u32;
+                let idx = *unique_glyphs.entry(bitmap).or_insert_with(|| {
+                    glyph_data.extend_from_slice(&bitmap);
+                    next_idx
+                });
+                mapping.insert(cp, idx);
+            }
+        }
+        for cp in [0x2500, 0x2501, 0x2502, 0x2503] {
+            if let Some(bitmap) = render_geometric(cp) {
+                let next_idx = unique_glyphs.len() as u32;
+                let idx = *unique_glyphs.entry(bitmap).or_insert_with(|| {
+                    glyph_data.extend_from_slice(&bitmap);
+                    next_idx
+                });
+                mapping.insert(cp, idx);
+            }
+        }
+
         for &(font_path, font_size) in FONT_PATHS {
             let c_path = match CString::new(font_path) {
                 Ok(p) => p,
@@ -227,7 +457,7 @@ fn main() {
             while gindex != 0 {
                 let cp = char_code as u32;
                 if !mapping.contains_key(&cp) {
-                    if let Some(bitmap) = render_char(face, cp) {
+                    if let Some(bitmap) = render_char(face, cp, font_size) {
                         let next_idx = unique_glyphs.len() as u32;
                         let idx = *unique_glyphs.entry(bitmap).or_insert_with(|| {
                             glyph_data.extend_from_slice(&bitmap);
