@@ -12,7 +12,7 @@ global FONT_BPG
 
 section .rodata
 font_data:
-    incbin "assets/nerd_font.bin"
+    incbin "assets/fonts/nerd_font.bin"
 
 section .text
 

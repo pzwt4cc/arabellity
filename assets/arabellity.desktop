@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Arabellity
+GenericName=Terminal Emulator
+Comment=Standalone Wayland terminal emulator written in pure x86-64 NASM assembly
+Exec=arabellity
+Icon=arabellity
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;cmd;terminal;
+StartupWMClass=arabellity

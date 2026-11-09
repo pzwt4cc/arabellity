@@ -237,7 +237,7 @@ fn main() {
 
         let glyph_count = unique_glyphs.len() as u32;
         let map_count = mapping.len() as u32;
-        let out_path = "assets/nerd_font.bin";
+        let out_path = "assets/fonts/nerd_font.bin";
 
         println!("Generating {}:", out_path);
         println!("  Unique glyphs: {}", glyph_count);

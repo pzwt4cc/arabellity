@@ -1,0 +1,35 @@
+# Maintainer: arabellity <https://github.com/arabellity/arabellity>
+pkgname=arabellity-git
+_pkgname=arabellity
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Standalone Wayland terminal emulator written in pure x86-64 NASM assembly"
+arch=('x86_64')
+url="https://github.com/arabellity/arabellity"
+license=('MIT')
+depends=()
+makedepends=('git' 'nasm' 'binutils')
+provides=('arabellity')
+conflicts=('arabellity')
+source=("git+https://github.com/arabellity/arabellity.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd "$_pkgname"
+  make
+}
+
+check() {
+  cd "$_pkgname"
+  make test
+}
+
+package() {
+  cd "$_pkgname"
+  make DESTDIR="$pkgdir" PREFIX=/usr install
+}

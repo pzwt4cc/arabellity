@@ -1,0 +1,27 @@
+# Maintainer: arabellity <https://github.com/arabellity/arabellity>
+pkgname=arabellity-bin
+_pkgname=arabellity
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Standalone Wayland terminal emulator written in pure x86-64 NASM assembly (prebuilt binary)"
+arch=('x86_64')
+url="https://github.com/arabellity/arabellity"
+license=('MIT')
+depends=()
+provides=('arabellity')
+conflicts=('arabellity' 'arabellity-git')
+source=("${url}/releases/download/v${pkgver}/${_pkgname}-${pkgver}-linux-x86_64.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "${srcdir}/${_pkgname}-${pkgver}"
+  install -Dm755 "${_pkgname}" "${pkgdir}/usr/bin/${_pkgname}"
+  install -Dm644 "${_pkgname}.desktop" "${pkgdir}/usr/share/applications/${_pkgname}.desktop"
+  install -Dm644 "icons/${_pkgname}.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/${_pkgname}.svg"
+  for s in 16 32 48 64 128 256; do
+    if [ -f "icons/${_pkgname}-${s}x${s}.png" ]; then
+      install -Dm644 "icons/${_pkgname}-${s}x${s}.png" "${pkgdir}/usr/share/icons/hicolor/${s}x${s}/apps/${_pkgname}.png"
+    fi
+  done
+  install -Dm644 "${_pkgname}.conf" "${pkgdir}/usr/share/${_pkgname}/${_pkgname}.conf.example"
+}
