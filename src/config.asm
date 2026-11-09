@@ -52,6 +52,9 @@ k_fg:                   db "foreground", 0
 k_cursor:               db "cursor", 0
 k_sel_bg:               db "selection_background", 0
 k_sel_fg:               db "selection_foreground", 0
+k_include:              db "include", 0
+s_kitty_conf:           db "/.config/kitty/kitty.conf", 0
+s_slash_kitty:          db "/.config/kitty/", 0
 
 default_conf_start:
     incbin "arabellity.conf"
@@ -84,6 +87,8 @@ conf_path:          resb 1024
 conf_buf:           resb 16384
 key_buf:            resb 128
 val_buf:            resb 128
+inc_path:           resb 1024
+inc_buf:            resb 16384
 
 section .text
 
@@ -100,6 +105,24 @@ config_load:
     je      .try_local
     mov     r12, rax
 
+    lea     rdi, [conf_path]
+    mov     rsi, r12
+    call    strcpy
+    mov     rdi, rax
+    lea     rsi, [s_kitty_conf]
+    call    strcpy
+
+    mov     eax, SYS_OPEN
+    lea     rdi, [conf_path]
+    mov     esi, O_RDONLY
+    xor     edx, edx
+    syscall
+    test    rax, rax
+    js      .load_arabellity
+    mov     rdi, rax
+    call    read_and_parse_fd
+
+.load_arabellity:
     lea     rdi, [conf_path]
     mov     rsi, r12
     call    strcpy
@@ -458,6 +481,12 @@ apply_kv:
     jnz     .do_sel_fg
 
     lea     rdi, [key_buf]
+    lea     rsi, [k_include]
+    call    streq
+    test    eax, eax
+    jnz     .do_include
+
+    lea     rdi, [key_buf]
     cmp     dword [rdi], 0x6f6c6f63
     jne     .kv_ret
     cmp     byte [rdi + 4], 'r'
@@ -602,6 +631,202 @@ apply_kv:
     test    edx, edx
     jz      .kv_ret
     mov     [cfg_sel_fg], eax
+    ret
+
+.do_include:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+
+    cmp     byte [val_buf], '/'
+    je      .inc_abs
+
+    test    r12, r12
+    jz      .inc_done
+    cmp     byte [r12], 0
+    je      .inc_done
+
+    lea     rdi, [inc_path]
+    mov     rsi, r12
+    call    strcpy
+    mov     rdi, rax
+    lea     rsi, [s_slash_kitty]
+    call    strcpy
+    mov     rdi, rax
+    lea     rsi, [val_buf]
+    call    strcpy
+    jmp     .inc_open
+
+.inc_abs:
+    lea     rdi, [inc_path]
+    lea     rsi, [val_buf]
+    call    strcpy
+
+.inc_open:
+    mov     eax, SYS_OPEN
+    lea     rdi, [inc_path]
+    mov     esi, O_RDONLY
+    xor     edx, edx
+    syscall
+    test    rax, rax
+    js      .inc_done
+    mov     ebx, eax
+
+    mov     eax, SYS_READ
+    mov     edi, ebx
+    lea     rsi, [inc_buf]
+    mov     edx, 16383
+    syscall
+    mov     r13, rax
+
+    mov     eax, SYS_CLOSE
+    mov     edi, ebx
+    syscall
+
+    test    r13, r13
+    jle     .inc_done
+    lea     rax, [inc_buf]
+    mov     byte [rax + r13], 0
+
+    lea     rdi, [inc_buf]
+    call    parse_included_buf
+
+.inc_done:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+parse_included_buf:
+    push    rbx
+    push    r12
+    mov     rbx, rdi
+
+.inc_line_loop:
+    movzx   eax, byte [rbx]
+    test    al, al
+    jz      .inc_buf_done
+
+.inc_skip_ws1:
+    movzx   eax, byte [rbx]
+    cmp     al, ' '
+    je      .inc_next_ws1
+    cmp     al, 9
+    je      .inc_next_ws1
+    cmp     al, 13
+    je      .inc_next_ws1
+    jmp     .inc_check_line
+.inc_next_ws1:
+    inc     rbx
+    jmp     .inc_skip_ws1
+
+.inc_check_line:
+    test    al, al
+    jz      .inc_buf_done
+    cmp     al, 10
+    je      .inc_next_line
+    cmp     al, '#'
+    je      .inc_skip_to_eol
+
+    lea     rdi, [key_buf]
+    xor     ecx, ecx
+.inc_read_key:
+    movzx   eax, byte [rbx]
+    test    al, al
+    jz      .inc_end_key
+    cmp     al, 10
+    je      .inc_end_key
+    cmp     al, 13
+    je      .inc_end_key
+    cmp     al, ' '
+    je      .inc_end_key
+    cmp     al, 9
+    je      .inc_end_key
+    cmp     al, '='
+    je      .inc_end_key
+    cmp     ecx, 126
+    jae     .inc_skip_key_ch
+    mov     [rdi + rcx], al
+    inc     ecx
+.inc_skip_key_ch:
+    inc     rbx
+    jmp     .inc_read_key
+.inc_end_key:
+    mov     byte [rdi + rcx], 0
+
+.inc_skip_sep:
+    movzx   eax, byte [rbx]
+    cmp     al, ' '
+    je      .inc_next_sep
+    cmp     al, 9
+    je      .inc_next_sep
+    cmp     al, '='
+    je      .inc_next_sep
+    jmp     .inc_read_val_start
+.inc_next_sep:
+    inc     rbx
+    jmp     .inc_skip_sep
+
+.inc_read_val_start:
+    lea     rdi, [val_buf]
+    xor     ecx, ecx
+.inc_read_val:
+    movzx   eax, byte [rbx]
+    test    al, al
+    jz      .inc_end_val
+    cmp     al, 10
+    je      .inc_end_val
+    cmp     al, 13
+    je      .inc_end_val
+    cmp     al, ' '
+    je      .inc_end_val
+    cmp     al, 9
+    je      .inc_end_val
+    cmp     ecx, 0
+    je      .inc_allow_hash
+    cmp     al, '#'
+    je      .inc_end_val
+.inc_allow_hash:
+    cmp     ecx, 126
+    jae     .inc_skip_val_ch
+    mov     [rdi + rcx], al
+    inc     ecx
+.inc_skip_val_ch:
+    inc     rbx
+    jmp     .inc_read_val
+.inc_end_val:
+    mov     byte [rdi + rcx], 0
+    test    ecx, ecx
+    jz      .inc_skip_to_eol
+
+    lea     rdi, [key_buf]
+    lea     rsi, [k_include]
+    call    streq
+    test    eax, eax
+    jnz     .inc_skip_to_eol
+
+    call    apply_kv
+
+.inc_skip_to_eol:
+    movzx   eax, byte [rbx]
+    test    al, al
+    jz      .inc_buf_done
+    cmp     al, 10
+    je      .inc_next_line
+    inc     rbx
+    jmp     .inc_skip_to_eol
+
+.inc_next_line:
+    inc     rbx
+    jmp     .inc_line_loop
+
+.inc_buf_done:
+    pop     r12
+    pop     rbx
     ret
 
 parse_uint:

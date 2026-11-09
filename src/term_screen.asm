@@ -71,10 +71,7 @@ extern kitty_gfx_render
 section .rodata
 da1_resp:       db 27, "[?62;c"
 da1_resp_len    equ $ - da1_resp
-osc_resp_10:    db 27, "]10;rgb:c9c9/d1d1/d9d9", 27, "\"
-osc_resp_10_len equ $ - osc_resp_10
-osc_resp_11:    db 27, "]11;rgb:0000/0000/0000", 27, "\"
-osc_resp_11_len equ $ - osc_resp_11
+hex_digits:     db "0123456789abcdef"
 xtversion_resp: db 27, "P>|kitty(0.49.2)", 27, "\"
 xtversion_resp_len equ $ - xtversion_resp
 kitty_kbd_resp: db 27, "[?0u"
@@ -2649,25 +2646,95 @@ handle_osc_command:
     jne     .osc_not_10
     cmp     word [rsi + 2], 0x3f3b
     jne     .osc_not_10
-    lea     rsi, [osc_resp_10]
-    mov     edx, osc_resp_10_len
-    mov     edi, [win_pty_fd]
-    test    edi, edi
-    js      .h_ret
-    call    write_all
+
+    mov     edi, [cfg_fg]
+    mov     al, '0'
+    call    send_osc_color_resp
     ret
+
 .osc_not_10:
     cmp     word [rsi], 0x3131
     jne     .h_ret
     cmp     word [rsi + 2], 0x3f3b
     jne     .h_ret
-    lea     rsi, [osc_resp_11]
-    mov     edx, osc_resp_11_len
+
+    mov     edi, [cfg_bg]
+    mov     al, '1'
+    call    send_osc_color_resp
+.h_ret:
+    ret
+
+send_osc_color_resp:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+
+    mov     r12d, edi
+    mov     r13b, al
+
+    lea     rdi, [cpr_buf]
+    mov     byte [rdi], 27
+    mov     byte [rdi + 1], ']'
+    mov     byte [rdi + 2], '1'
+    mov     [rdi + 3], r13b
+    mov     byte [rdi + 4], ';'
+    mov     byte [rdi + 5], 'r'
+    mov     byte [rdi + 6], 'g'
+    mov     byte [rdi + 7], 'b'
+    mov     byte [rdi + 8], ':'
+    add     rdi, 9
+
+    mov     eax, r12d
+    shr     eax, 16
+    and     eax, 0xff
+    call    emit_hex_byte2
+    mov     byte [rdi], '/'
+    inc     rdi
+
+    mov     eax, r12d
+    shr     eax, 8
+    and     eax, 0xff
+    call    emit_hex_byte2
+    mov     byte [rdi], '/'
+    inc     rdi
+
+    mov     eax, r12d
+    and     eax, 0xff
+    call    emit_hex_byte2
+
+    mov     byte [rdi], 27
+    mov     byte [rdi + 1], 92
+    add     rdi, 2
+
+    lea     rsi, [cpr_buf]
+    mov     rdx, rdi
+    sub     rdx, rsi
     mov     edi, [win_pty_fd]
     test    edi, edi
-    js      .h_ret
+    js      .socr_done
     call    write_all
-.h_ret:
+.socr_done:
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+emit_hex_byte2:
+    lea     rcx, [hex_digits]
+    mov     edx, eax
+    shr     edx, 4
+    and     edx, 0x0f
+    mov     dl, [rcx + rdx]
+    mov     [rdi], dl
+    mov     [rdi + 1], dl
+    mov     edx, eax
+    and     edx, 0x0f
+    mov     dl, [rcx + rdx]
+    mov     [rdi + 2], dl
+    mov     [rdi + 3], dl
+    add     rdi, 4
     ret
 
 format_u32:
