@@ -1,11 +1,11 @@
-# Maintainer: arabellity <https://github.com/arabellity/arabellity>
+# Maintainer: pzwt4cc <https://github.com/pzwt4cc/arabellity>
 pkgname=arabellity-bin
 _pkgname=arabellity
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Standalone Wayland terminal emulator written in pure x86-64 NASM assembly (prebuilt binary)"
 arch=('x86_64')
-url="https://github.com/arabellity/arabellity"
+url="https://github.com/pzwt4cc/arabellity"
 license=('MIT')
 depends=()
 provides=('arabellity')
