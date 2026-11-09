@@ -75,6 +75,7 @@ dist: $(BIN) | $(BUILD)
 	fi
 	cp arabellity.conf $(BUILD)/$(NAME)-$(VERSION)/
 	cp README.md $(BUILD)/$(NAME)-$(VERSION)/
+	@if [ -f README.ru.md ]; then cp README.ru.md $(BUILD)/$(NAME)-$(VERSION)/; fi
 	tar -czf $(BUILD)/$(NAME)-$(VERSION)-linux-x86_64.tar.gz -C $(BUILD) $(NAME)-$(VERSION)
 	@echo "Distribution archive created: $(BUILD)/$(NAME)-$(VERSION)-linux-x86_64.tar.gz"
 
