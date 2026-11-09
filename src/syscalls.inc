@@ -2,6 +2,7 @@
 %define SYS_WRITE           1
 %define SYS_OPEN            2
 %define SYS_CLOSE           3
+%define SYS_FSTAT           5
 %define SYS_POLL            7
 %define SYS_MMAP            9
 %define SYS_MUNMAP          11
@@ -16,6 +17,7 @@
 %define SYS_EXIT            60
 %define SYS_WAIT4           61
 %define SYS_FTRUNCATE       77
+%define SYS_UNLINK          87
 %define SYS_SETSID          112
 %define SYS_TIMERFD_CREATE  283
 %define SYS_TIMERFD_SETTIME 286
@@ -32,6 +34,8 @@
 
 %define EINTR               4
 
+%define O_RDONLY            0
+%define O_WRONLY            1
 %define O_RDWR              0x2
 %define O_NOCTTY            0x100
 %define O_CLOEXEC           0x80000
@@ -58,3 +62,5 @@
 %define PROT_READ           1
 %define PROT_WRITE          2
 %define MAP_SHARED          1
+%define MAP_PRIVATE         2
+%define MAP_ANONYMOUS       0x20

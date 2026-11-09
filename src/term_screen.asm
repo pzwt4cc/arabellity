@@ -30,6 +30,7 @@ global font_w
 global font_h
 global url_hover_active
 global term_scroll_up
+global term_find_placeholder_bounds
 
 extern font_glyph_data
 extern font_glyph_for_char
@@ -74,6 +75,10 @@ osc_resp_10:    db 27, "]10;rgb:c9c9/d1d1/d9d9", 27, "\"
 osc_resp_10_len equ $ - osc_resp_10
 osc_resp_11:    db 27, "]11;rgb:0000/0000/0000", 27, "\"
 osc_resp_11_len equ $ - osc_resp_11
+xtversion_resp: db 27, "P>|kitty(0.49.2)", 27, "\"
+xtversion_resp_len equ $ - xtversion_resp
+kitty_kbd_resp: db 27, "[?0u"
+kitty_kbd_resp_len equ $ - kitty_kbd_resp
 
 section .data
 font_w:             dd 10
@@ -127,6 +132,7 @@ alt_cursor_row:     resd 1
 cpr_buf:            resb 32
 osc_buf:            resb 64
 osc_len:            resd 1
+placeholder_diacritics_left: resd 1
 
 row_wrapped:        resb MAX_ROWS
 alt_row_wrapped:    resb MAX_ROWS
@@ -150,6 +156,7 @@ empty_line:         resb MAX_COLS * CELL_SIZE
 section .text
 
 term_init:
+    mov     dword [placeholder_diacritics_left], 0
     mov     dword [term_cols], 80
     mov     dword [term_rows], 24
     mov     dword [term_cursor_col], 0
@@ -667,6 +674,10 @@ term_process_char:
 .state_ground:
     cmp     edi, 27
     je      .to_esc
+    cmp     edi, 32
+    jae     .printable_char
+
+    mov     dword [placeholder_diacritics_left], 0
     cmp     edi, 10
     je      .linefeed
     cmp     edi, 11
@@ -679,13 +690,27 @@ term_process_char:
     je      .backspace
     cmp     edi, 9
     je      .tab
-    cmp     edi, 7
-    je      .ret
-    cmp     edi, 32
-    jb      .ret
+    ret
+
+.printable_char:
+    cmp     dword [placeholder_diacritics_left], 0
+    jz      .not_ph_diacritic
+    cmp     edi, 0x0300
+    jb      .reset_ph_diacritic
+    dec     dword [placeholder_diacritics_left]
+    ret
+.reset_ph_diacritic:
+    mov     dword [placeholder_diacritics_left], 0
+.not_ph_diacritic:
+
+    cmp     edi, 0x0300
+    jb      .put_char
+    cmp     edi, 0x036F
+    jbe     .ret
     jmp     .put_char
 
 .to_esc:
+    mov     dword [placeholder_diacritics_left], 0
     mov     dword [esc_state], 1
     ret
 
@@ -895,7 +920,12 @@ term_process_char:
     cmp     edi, 0x7E
     ja      .csi_abort
     cmp     byte [csi_private], 2
-    je      .csi_abort
+    jne     .csi_not_priv2
+    cmp     edi, 'q'
+    jne     .csi_abort
+    call    send_xtversion
+    jmp     .csi_abort
+.csi_not_priv2:
     push    rdi
     mov     eax, [csi_argc]
     inc     eax
@@ -1002,6 +1032,11 @@ term_process_char:
     mov     [rdx + 4], eax
     mov     eax, [cur_bg]
     mov     [rdx + 8], eax
+
+    cmp     edi, 0x10EEEE
+    jne     .not_ph_cell
+    mov     dword [placeholder_diacritics_left], 2
+.not_ph_cell:
 
     mov     eax, [term_cursor_col]
     inc     eax
@@ -1486,6 +1521,88 @@ get_row_ptr:
     lea     rax, [empty_line]
     ret
 
+term_find_placeholder_bounds:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rbp
+
+    mov     r12d, edi
+    and     r12d, 0x00ffffff
+    mov     r13, rsi
+
+    mov     dword [r13], 999999
+    mov     dword [r13 + 4], 999999
+    mov     dword [r13 + 8], -1
+    mov     dword [r13 + 12], -1
+
+    xor     ebx, ebx
+    xor     r14d, r14d
+
+.ph_row_loop:
+    cmp     ebx, [term_rows]
+    jae     .ph_check_found
+
+    mov     rdi, rbx
+    call    get_row_ptr
+    mov     r15, rax
+
+    xor     ebp, ebp
+.ph_col_loop:
+    cmp     ebp, [term_cols]
+    jae     .ph_row_next
+
+    mov     eax, ebp
+    shl     eax, 4
+    lea     rax, [r15 + rax]
+
+    cmp     dword [rax], 0x10EEEE
+    jne     .ph_col_next
+
+    mov     edx, [rax + 4]
+    and     edx, 0x00ffffff
+    cmp     edx, r12d
+    jne     .ph_col_next
+
+    mov     r14d, 1
+
+    cmp     ebp, [r13]
+    jge     .ph_col_min_ok
+    mov     [r13], ebp
+.ph_col_min_ok:
+    cmp     ebx, [r13 + 4]
+    jge     .ph_row_min_ok
+    mov     [r13 + 4], ebx
+.ph_row_min_ok:
+    cmp     ebp, [r13 + 8]
+    jle     .ph_col_max_ok
+    mov     [r13 + 8], ebp
+.ph_col_max_ok:
+    cmp     ebx, [r13 + 12]
+    jle     .ph_row_max_ok
+    mov     [r13 + 12], ebx
+.ph_row_max_ok:
+
+.ph_col_next:
+    inc     ebp
+    jmp     .ph_col_loop
+
+.ph_row_next:
+    inc     ebx
+    jmp     .ph_row_loop
+
+.ph_check_found:
+    mov     eax, r14d
+    pop     rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
 term_handle_csi:
     cmp     byte [csi_private], 1
     je      .csi_priv
@@ -1549,6 +1666,18 @@ term_handle_csi:
     je      .priv_reset
     cmp     edi, 'c'
     je      .da1
+    cmp     edi, 'u'
+    je      .kitty_kbd
+    ret
+
+.kitty_kbd:
+    lea     rsi, [kitty_kbd_resp]
+    mov     edx, kitty_kbd_resp_len
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .kbd_ret
+    call    write_all
+.kbd_ret:
     ret
 
 .da1:
@@ -2432,6 +2561,16 @@ cube_comp:
 .cc_ret:
     ret
 
+send_xtversion:
+    lea     rsi, [xtversion_resp]
+    mov     edx, xtversion_resp_len
+    mov     edi, [win_pty_fd]
+    test    edi, edi
+    js      .xt_ret
+    call    write_all
+.xt_ret:
+    ret
+
 send_cpr:
     push    rbx
     push    r12
@@ -2648,6 +2787,8 @@ term_render:
     je      .space_cell
     test    edi, edi
     jz      .space_cell
+    cmp     edi, 0x10EEEE
+    je      .space_cell
 
     or      r8d, 0xff000000
     cmp     r9d, [cfg_bg]
