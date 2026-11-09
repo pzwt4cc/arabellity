@@ -99,6 +99,10 @@ saved_cursor_col:   resd 1
 saved_cursor_row:   resd 1
 cur_fg:             resd 1
 cur_bg:             resd 1
+cur_reverse:        resb 1
+saved_cur_reverse:  resb 1
+saved_cur_fg:       resd 1
+saved_cur_bg:       resd 1
 
 term_sel_start_col: resd 1
 term_sel_start_row: resd 1
@@ -164,8 +168,12 @@ term_init:
     mov     dword [saved_cursor_row], 0
     mov     eax, [cfg_fg]
     mov     [cur_fg], eax
+    mov     [saved_cur_fg], eax
     mov     eax, [cfg_bg]
     mov     [cur_bg], eax
+    mov     [saved_cur_bg], eax
+    mov     byte [cur_reverse], 0
+    mov     byte [saved_cur_reverse], 0
     mov     dword [esc_state], 0
     mov     dword [utf8_state], 0
     mov     byte [cursor_visible], 1
@@ -773,6 +781,12 @@ term_process_char:
     mov     [saved_cursor_row], eax
     mov     al, [wrap_next]
     mov     [saved_wrap_next], al
+    mov     al, [cur_reverse]
+    mov     [saved_cur_reverse], al
+    mov     eax, [cur_fg]
+    mov     [saved_cur_fg], eax
+    mov     eax, [cur_bg]
+    mov     [saved_cur_bg], eax
     mov     dword [esc_state], 0
     ret
 
@@ -783,6 +797,12 @@ term_process_char:
     mov     [term_cursor_row], eax
     mov     al, [saved_wrap_next]
     mov     [wrap_next], al
+    mov     al, [saved_cur_reverse]
+    mov     [cur_reverse], al
+    mov     eax, [saved_cur_fg]
+    mov     [cur_fg], eax
+    mov     eax, [saved_cur_bg]
+    mov     [cur_bg], eax
     mov     dword [esc_state], 0
     ret
 
@@ -1028,9 +1048,13 @@ term_process_char:
 
     mov     [rdx], edi
     mov     eax, [cur_fg]
+    mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .pc_no_rev
+    xchg    eax, r8d
+.pc_no_rev:
     mov     [rdx + 4], eax
-    mov     eax, [cur_bg]
-    mov     [rdx + 8], eax
+    mov     [rdx + 8], r8d
 
     cmp     edi, 0x10EEEE
     jne     .not_ph_cell
@@ -1101,6 +1125,10 @@ term_scroll_up:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .cl_no_rev
+    xchg    edx, r8d
+.cl_no_rev:
 .clear_last:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -1180,6 +1208,10 @@ term_scroll_down:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .cf_no_rev
+    xchg    edx, r8d
+.cf_no_rev:
 .clear_first:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -1214,6 +1246,10 @@ term_scroll_up_from_cursor:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .cb_no_rev
+    xchg    edx, r8d
+.cb_no_rev:
 .cb_loop:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -1249,6 +1285,10 @@ term_scroll_down_from_cursor:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .cc_no_rev
+    xchg    edx, r8d
+.cc_no_rev:
 .cc_loop:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -1930,6 +1970,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .ech_no_rev
+    xchg    edx, r8d
+.ech_no_rev:
 .ech_loop:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -1975,6 +2019,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r9d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .dch_no_rev
+    xchg    edx, r9d
+.dch_no_rev:
 .dch_loop:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -2068,8 +2116,19 @@ term_handle_csi:
     mov     [cur_fg], eax
     mov     eax, [cfg_bg]
     mov     [cur_bg], eax
+    mov     byte [cur_reverse], 0
     jmp     .sgr_next
 .not_0:
+    cmp     eax, 7
+    jne     .not_reverse
+    mov     byte [cur_reverse], 1
+    jmp     .sgr_next
+.not_reverse:
+    cmp     eax, 27
+    jne     .not_positive
+    mov     byte [cur_reverse], 0
+    jmp     .sgr_next
+.not_positive:
     cmp     eax, 8
     jne     .not_conceal
     mov     eax, [cur_bg]
@@ -2276,6 +2335,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .ed_ab_no_rev1
+    xchg    edx, r8d
+.ed_ab_no_rev1:
 .ed_ab_cur:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -2297,6 +2360,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .ed_ab_no_rev2
+    xchg    edx, r8d
+.ed_ab_no_rev2:
 .ed_ab_fill:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -2334,6 +2401,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .ed_bel_no_rev
+    xchg    edx, r8d
+.ed_bel_no_rev:
 .ed_bel_cur:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -2357,6 +2428,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .ed_row_no_rev
+    xchg    edx, r8d
+.ed_row_no_rev:
 .ed_row_fill:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -2392,6 +2467,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .el_no_rev1
+    xchg    edx, r8d
+.el_no_rev1:
 .el_loop:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -2413,6 +2492,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .el_no_rev2
+    xchg    edx, r8d
+.el_no_rev2:
 .el_left_loop:
     mov     [rdi], eax
     mov     [rdi + 4], edx
@@ -2432,6 +2515,10 @@ term_handle_csi:
     mov     eax, ' '
     mov     edx, [cur_fg]
     mov     r8d, [cur_bg]
+    cmp     byte [cur_reverse], 0
+    je      .el_no_rev3
+    xchg    edx, r8d
+.el_no_rev3:
 .el_entire_loop:
     mov     [rdi], eax
     mov     [rdi + 4], edx
