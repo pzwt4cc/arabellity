@@ -438,7 +438,6 @@ term_clear_grid:
     xor     eax, eax
     rep     stosb
     mov     dword [shrink_scrolled], 0
-    call    kitty_gfx_clear
     ret
 
 term_resize:

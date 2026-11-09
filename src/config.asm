@@ -504,6 +504,7 @@ apply_kv:
     jz      .kv_ret
     lea     rdx, [ansi_colors]
     mov     [rdx + rcx*4], eax
+    ret
 .kv_ret:
     ret
 
