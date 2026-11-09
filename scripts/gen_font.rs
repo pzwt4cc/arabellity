@@ -11,10 +11,16 @@ const BPG: usize = WIDTH * HEIGHT;
 const FT_LOAD_RENDER: c_int = 4;
 
 const FONT_PATHS: &[(&str, c_uint)] = &[
-    ("/usr/share/fonts/TTF/JetBrainsMonoNerdFontMono-Medium.ttf", 15),
+    (
+        "/usr/share/fonts/TTF/JetBrainsMonoNerdFontMono-Medium.ttf",
+        15,
+    ),
     ("/usr/share/fonts/TTF/NotoSansMNerdFontMono-Medium.ttf", 15),
     ("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 14),
-    ("/usr/share/fonts/IosevkaNerdFont/IosevkaNerdFontMono-Medium.ttf", 16),
+    (
+        "/usr/share/fonts/IosevkaNerdFont/IosevkaNerdFontMono-Medium.ttf",
+        16,
+    ),
     ("/usr/share/fonts/noto/NotoSansMath-Regular.ttf", 14),
     ("/usr/share/fonts/noto/NotoSansSymbols-Medium.ttf", 14),
     ("/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf", 14),
@@ -89,6 +95,351 @@ fn bilinear_scale(
         }
     }
     out
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum BoxStyle {
+    Off,
+    Light,
+    Heavy,
+    Double,
+}
+
+fn box_arms(cp: u32) -> Option<(BoxStyle, BoxStyle, BoxStyle, BoxStyle)> {
+    use BoxStyle::*;
+    let res = match cp {
+        0x2500 => (Off, Off, Light, Light),
+        0x2501 => (Off, Off, Heavy, Heavy),
+        0x2502 => (Light, Light, Off, Off),
+        0x2503 => (Heavy, Heavy, Off, Off),
+        0x250C => (Off, Light, Off, Light),
+        0x250D => (Off, Light, Off, Heavy),
+        0x250E => (Off, Heavy, Off, Light),
+        0x250F => (Off, Heavy, Off, Heavy),
+        0x2510 => (Off, Light, Light, Off),
+        0x2511 => (Off, Light, Heavy, Off),
+        0x2512 => (Off, Heavy, Light, Off),
+        0x2513 => (Off, Heavy, Heavy, Off),
+        0x2514 => (Light, Off, Off, Light),
+        0x2515 => (Light, Off, Off, Heavy),
+        0x2516 => (Heavy, Off, Off, Light),
+        0x2517 => (Heavy, Off, Off, Heavy),
+        0x2518 => (Light, Off, Light, Off),
+        0x2519 => (Light, Off, Heavy, Off),
+        0x251A => (Heavy, Off, Light, Off),
+        0x251B => (Heavy, Off, Heavy, Off),
+        0x251C => (Light, Light, Off, Light),
+        0x251D => (Light, Light, Off, Heavy),
+        0x251E => (Heavy, Light, Off, Light),
+        0x251F => (Light, Heavy, Off, Light),
+        0x2520 => (Heavy, Heavy, Off, Light),
+        0x2521 => (Light, Heavy, Off, Heavy),
+        0x2522 => (Heavy, Light, Off, Heavy),
+        0x2523 => (Heavy, Heavy, Off, Heavy),
+        0x2524 => (Light, Light, Light, Off),
+        0x2525 => (Light, Light, Heavy, Off),
+        0x2526 => (Heavy, Light, Light, Off),
+        0x2527 => (Light, Heavy, Light, Off),
+        0x2528 => (Heavy, Heavy, Light, Off),
+        0x2529 => (Light, Heavy, Heavy, Off),
+        0x252A => (Heavy, Light, Heavy, Off),
+        0x252B => (Heavy, Heavy, Heavy, Off),
+        0x252C => (Off, Light, Light, Light),
+        0x252D => (Off, Light, Heavy, Light),
+        0x252E => (Off, Light, Light, Heavy),
+        0x252F => (Off, Light, Heavy, Heavy),
+        0x2530 => (Off, Heavy, Light, Light),
+        0x2531 => (Off, Heavy, Heavy, Light),
+        0x2532 => (Off, Heavy, Light, Heavy),
+        0x2533 => (Off, Heavy, Heavy, Heavy),
+        0x2534 => (Light, Off, Light, Light),
+        0x2535 => (Light, Off, Heavy, Light),
+        0x2536 => (Light, Off, Light, Heavy),
+        0x2537 => (Light, Off, Heavy, Heavy),
+        0x2538 => (Heavy, Off, Light, Light),
+        0x2539 => (Heavy, Off, Heavy, Light),
+        0x253A => (Heavy, Off, Light, Heavy),
+        0x253B => (Heavy, Off, Heavy, Heavy),
+        0x253C => (Light, Light, Light, Light),
+        0x253D => (Light, Light, Heavy, Light),
+        0x253E => (Light, Light, Light, Heavy),
+        0x253F => (Light, Light, Heavy, Heavy),
+        0x2540 => (Heavy, Light, Light, Light),
+        0x2541 => (Light, Heavy, Light, Light),
+        0x2542 => (Heavy, Heavy, Light, Light),
+        0x2543 => (Heavy, Light, Heavy, Light),
+        0x2544 => (Heavy, Light, Light, Heavy),
+        0x2545 => (Light, Heavy, Heavy, Light),
+        0x2546 => (Light, Heavy, Light, Heavy),
+        0x2547 => (Light, Heavy, Heavy, Heavy),
+        0x2548 => (Heavy, Light, Heavy, Heavy),
+        0x2549 => (Heavy, Heavy, Heavy, Light),
+        0x254A => (Heavy, Heavy, Light, Heavy),
+        0x254B => (Heavy, Heavy, Heavy, Heavy),
+        0x2550 => (Off, Off, Double, Double),
+        0x2551 => (Double, Double, Off, Off),
+        0x2552 => (Off, Light, Off, Double),
+        0x2553 => (Off, Double, Off, Light),
+        0x2554 => (Off, Double, Off, Double),
+        0x2555 => (Off, Light, Double, Off),
+        0x2556 => (Off, Double, Light, Off),
+        0x2557 => (Off, Double, Double, Off),
+        0x2558 => (Light, Off, Off, Double),
+        0x2559 => (Double, Off, Off, Light),
+        0x255A => (Double, Off, Off, Double),
+        0x255B => (Light, Off, Double, Off),
+        0x255C => (Double, Off, Light, Off),
+        0x255D => (Double, Off, Double, Off),
+        0x255E => (Light, Light, Off, Double),
+        0x255F => (Double, Double, Off, Light),
+        0x2560 => (Double, Double, Off, Double),
+        0x2561 => (Light, Light, Double, Off),
+        0x2562 => (Double, Double, Light, Off),
+        0x2563 => (Double, Double, Double, Off),
+        0x2564 => (Off, Light, Double, Double),
+        0x2565 => (Off, Double, Light, Light),
+        0x2566 => (Off, Double, Double, Double),
+        0x2567 => (Light, Off, Double, Double),
+        0x2568 => (Double, Off, Light, Light),
+        0x2569 => (Double, Off, Double, Double),
+        0x256A => (Light, Light, Double, Double),
+        0x256B => (Double, Double, Light, Light),
+        0x256C => (Double, Double, Double, Double),
+        0x2574 => (Off, Off, Light, Off),
+        0x2575 => (Light, Off, Off, Off),
+        0x2576 => (Off, Off, Off, Light),
+        0x2577 => (Off, Light, Off, Off),
+        0x2578 => (Off, Off, Heavy, Off),
+        0x2579 => (Heavy, Off, Off, Off),
+        0x257A => (Off, Off, Off, Heavy),
+        0x257B => (Off, Heavy, Off, Off),
+        0x257C => (Off, Off, Light, Heavy),
+        0x257D => (Light, Heavy, Off, Off),
+        0x257E => (Off, Off, Heavy, Light),
+        0x257F => (Heavy, Light, Off, Off),
+        _ => return None,
+    };
+    Some(res)
+}
+
+fn render_box(up: BoxStyle, down: BoxStyle, left: BoxStyle, right: BoxStyle) -> [u8; BPG] {
+    let mut raw = [0u8; BPG];
+
+    if up == BoxStyle::Off
+        && down == BoxStyle::Double
+        && left == BoxStyle::Off
+        && right == BoxStyle::Double
+    {
+        for y in 6..=7 {
+            for x in 2..10 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 12..=13 {
+            for x in 6..10 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 6..20 {
+            for x in 2..=3 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 12..20 {
+            for x in 6..=7 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        return raw;
+    }
+    if up == BoxStyle::Off
+        && down == BoxStyle::Double
+        && left == BoxStyle::Double
+        && right == BoxStyle::Off
+    {
+        for y in 6..=7 {
+            for x in 0..=7 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 12..=13 {
+            for x in 0..=3 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 6..20 {
+            for x in 6..=7 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 12..20 {
+            for x in 2..=3 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        return raw;
+    }
+    if up == BoxStyle::Double
+        && down == BoxStyle::Off
+        && left == BoxStyle::Off
+        && right == BoxStyle::Double
+    {
+        for y in 12..=13 {
+            for x in 2..10 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 6..=7 {
+            for x in 6..10 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 0..=13 {
+            for x in 2..=3 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 0..=7 {
+            for x in 6..=7 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        return raw;
+    }
+    if up == BoxStyle::Double
+        && down == BoxStyle::Off
+        && left == BoxStyle::Double
+        && right == BoxStyle::Off
+    {
+        for y in 12..=13 {
+            for x in 0..=7 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 6..=7 {
+            for x in 0..=3 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 0..=13 {
+            for x in 6..=7 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        for y in 0..=7 {
+            for x in 2..=3 {
+                raw[y * WIDTH + x] = 255;
+            }
+        }
+        return raw;
+    }
+
+    let draw_h = |raw: &mut [u8; BPG], style: BoxStyle, x_start: usize, x_end: usize| match style {
+        BoxStyle::Light => {
+            for y in 9..=10 {
+                for x in x_start..=x_end {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+        }
+        BoxStyle::Heavy => {
+            for y in 8..=11 {
+                for x in x_start..=x_end {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+        }
+        BoxStyle::Double => {
+            for y in 6..=7 {
+                for x in x_start..=x_end {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            for y in 12..=13 {
+                for x in x_start..=x_end {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+        }
+        BoxStyle::Off => {}
+    };
+
+    let draw_v = |raw: &mut [u8; BPG], style: BoxStyle, y_start: usize, y_end: usize| match style {
+        BoxStyle::Light => {
+            for y in y_start..=y_end {
+                for x in 4..=5 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+        }
+        BoxStyle::Heavy => {
+            for y in y_start..=y_end {
+                for x in 3..=6 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+        }
+        BoxStyle::Double => {
+            for y in y_start..=y_end {
+                for x in 2..=3 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for x in 6..=7 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+        }
+        BoxStyle::Off => {}
+    };
+
+    if up != BoxStyle::Off {
+        draw_v(&mut raw, up, 0, 9);
+    }
+    if down != BoxStyle::Off {
+        draw_v(&mut raw, down, 10, 19);
+    }
+    if left != BoxStyle::Off {
+        draw_h(&mut raw, left, 0, 4);
+    }
+    if right != BoxStyle::Off {
+        draw_h(&mut raw, right, 5, 9);
+    }
+
+    if (up != BoxStyle::Off || down != BoxStyle::Off)
+        && (left != BoxStyle::Off || right != BoxStyle::Off)
+    {
+        let v_style = if up != BoxStyle::Off { up } else { down };
+        let h_style = if left != BoxStyle::Off { left } else { right };
+
+        if v_style == BoxStyle::Double && h_style == BoxStyle::Double {
+        } else if v_style == BoxStyle::Double {
+            draw_h(&mut raw, h_style, 2, 7);
+        } else if h_style == BoxStyle::Double {
+            draw_v(&mut raw, v_style, 6, 13);
+        } else {
+            let x_range = if v_style == BoxStyle::Heavy
+                || (up == BoxStyle::Heavy && down == BoxStyle::Heavy)
+            {
+                3..=6
+            } else {
+                4..=5
+            };
+            let y_range = if h_style == BoxStyle::Heavy
+                || (left == BoxStyle::Heavy && right == BoxStyle::Heavy)
+            {
+                8..=11
+            } else {
+                9..=10
+            };
+            for y in y_range {
+                for x in x_range.clone() {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+        }
+    }
+
+    raw
 }
 
 fn render_geometric(cp: u32) -> Option<[u8; BPG]> {
@@ -208,45 +559,249 @@ fn render_geometric(cp: u32) -> Option<[u8; BPG]> {
             return Some(raw);
         }
     }
-    if cp == 0x2500 {
-        for y in 9..=10 {
-            for x in 0..WIDTH {
-                raw[y * WIDTH + x] = 255;
-            }
-        }
-        return Some(raw);
+
+    if let Some((u, d, l, r)) = box_arms(cp) {
+        return Some(render_box(u, d, l, r));
     }
-    if cp == 0x2501 {
-        for y in 8..=11 {
-            for x in 0..WIDTH {
-                raw[y * WIDTH + x] = 255;
+
+    match cp {
+        0x2504 => {
+            for y in 9..=10 {
+                for x in [0, 1, 4, 5, 8, 9] {
+                    raw[y * WIDTH + x] = 255;
+                }
             }
+            Some(raw)
         }
-        return Some(raw);
-    }
-    if cp == 0x2502 {
-        for y in 0..HEIGHT {
+        0x2505 => {
+            for y in 8..=11 {
+                for x in [0, 1, 4, 5, 8, 9] {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x2506 => {
             for x in 4..=5 {
-                raw[y * WIDTH + x] = 255;
+                for y in 1..=4 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for y in 8..=11 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for y in 15..=18 {
+                    raw[y * WIDTH + x] = 255;
+                }
             }
+            Some(raw)
         }
-        return Some(raw);
-    }
-    if cp == 0x2503 {
-        for y in 0..HEIGHT {
+        0x2507 => {
             for x in 3..=6 {
-                raw[y * WIDTH + x] = 255;
+                for y in 1..=4 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for y in 8..=11 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for y in 15..=18 {
+                    raw[y * WIDTH + x] = 255;
+                }
             }
+            Some(raw)
         }
-        return Some(raw);
+        0x2508 => {
+            for y in 9..=10 {
+                for x in [0, 1, 3, 4, 6, 8, 9] {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x2509 => {
+            for y in 8..=11 {
+                for x in [0, 1, 3, 4, 6, 8, 9] {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x250A => {
+            for x in 4..=5 {
+                for y in [1, 2, 6, 7, 11, 12, 16, 17] {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x250B => {
+            for x in 3..=6 {
+                for y in [1, 2, 6, 7, 11, 12, 16, 17] {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x254C => {
+            for y in 9..=10 {
+                for x in 1..=3 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for x in 6..=8 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x254D => {
+            for y in 8..=11 {
+                for x in 1..=3 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for x in 6..=8 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x254E => {
+            for x in 4..=5 {
+                for y in 2..=7 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for y in 12..=17 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x254F => {
+            for x in 3..=6 {
+                for y in 2..=7 {
+                    raw[y * WIDTH + x] = 255;
+                }
+                for y in 12..=17 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x256D => {
+            for y in 9..=10 {
+                for x in 6..10 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            raw[10 * WIDTH + 5] = 255;
+            raw[11 * WIDTH + 5] = 255;
+            raw[11 * WIDTH + 4] = 255;
+            raw[12 * WIDTH + 4] = 255;
+            raw[12 * WIDTH + 5] = 255;
+            raw[13 * WIDTH + 4] = 255;
+            raw[13 * WIDTH + 5] = 255;
+            for y in 14..20 {
+                for x in 4..=5 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x256E => {
+            for y in 9..=10 {
+                for x in 0..=3 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            raw[10 * WIDTH + 4] = 255;
+            raw[11 * WIDTH + 4] = 255;
+            raw[11 * WIDTH + 5] = 255;
+            raw[12 * WIDTH + 4] = 255;
+            raw[12 * WIDTH + 5] = 255;
+            raw[13 * WIDTH + 4] = 255;
+            raw[13 * WIDTH + 5] = 255;
+            for y in 14..20 {
+                for x in 4..=5 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x256F => {
+            for y in 9..=10 {
+                for x in 0..=3 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            raw[9 * WIDTH + 4] = 255;
+            raw[8 * WIDTH + 4] = 255;
+            raw[8 * WIDTH + 5] = 255;
+            raw[7 * WIDTH + 4] = 255;
+            raw[7 * WIDTH + 5] = 255;
+            raw[6 * WIDTH + 4] = 255;
+            raw[6 * WIDTH + 5] = 255;
+            for y in 0..6 {
+                for x in 4..=5 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x2570 => {
+            for y in 9..=10 {
+                for x in 6..10 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            raw[9 * WIDTH + 5] = 255;
+            raw[8 * WIDTH + 5] = 255;
+            raw[8 * WIDTH + 4] = 255;
+            raw[7 * WIDTH + 4] = 255;
+            raw[7 * WIDTH + 5] = 255;
+            raw[6 * WIDTH + 4] = 255;
+            raw[6 * WIDTH + 5] = 255;
+            for y in 0..6 {
+                for x in 4..=5 {
+                    raw[y * WIDTH + x] = 255;
+                }
+            }
+            Some(raw)
+        }
+        0x2571 => {
+            for y in 0..20 {
+                let x = ((19 - y) * 9 + 9) / 19;
+                raw[y * WIDTH + x] = 255;
+                if x > 0 {
+                    raw[y * WIDTH + x - 1] = 180;
+                }
+            }
+            Some(raw)
+        }
+        0x2572 => {
+            for y in 0..20 {
+                let x = (y * 9 + 9) / 19;
+                raw[y * WIDTH + x] = 255;
+                if x + 1 < WIDTH {
+                    raw[y * WIDTH + x + 1] = 180;
+                }
+            }
+            Some(raw)
+        }
+        0x2573 => {
+            let mut r1 = render_geometric(0x2571).unwrap();
+            let r2 = render_geometric(0x2572).unwrap();
+            for i in 0..BPG {
+                r1[i] = r1[i].max(r2[i]);
+            }
+            Some(r1)
+        }
+        _ => None,
     }
-    None
 }
 
 unsafe fn render_char(face: *mut u8, cp: u32, default_size: c_uint) -> Option<[u8; BPG]> {
-    let is_icon = (0xE000..=0xF8FF).contains(&cp) || (0xF0000..=0x10FFFF).contains(&cp);
+    let is_icon = ((0xE000..=0xF8FF).contains(&cp) || (0xF0000..=0x10FFFF).contains(&cp))
+        && !(0xE0A0..=0xE0D4).contains(&cp);
     if is_icon {
-        FT_Set_Pixel_Sizes(face, 0, 18);
+        FT_Set_Pixel_Sizes(face, 0, 20);
     }
     let load_res = FT_Load_Char(face, cp as c_ulong, FT_LOAD_RENDER);
     if is_icon {
@@ -282,15 +837,27 @@ unsafe fn render_char(face: *mut u8, cp: u32, default_size: c_uint) -> Option<[u
             }
         }
 
-        let scale = if bm_width > WIDTH as i32 || bm_rows > HEIGHT as i32 {
-            (bm_width as f32 / WIDTH as f32).max(bm_rows as f32 / HEIGHT as f32)
+        let (target_w, target_h) = if is_icon {
+            let aspect = bm_width as f32 / bm_rows as f32;
+            if aspect > 1.4 {
+                let w = 10;
+                let h = ((10.0 / aspect).round() as i32).clamp(1, 14);
+                (w, h)
+            } else {
+                let h = 14;
+                let w = ((14.0 * aspect).round() as i32).clamp(1, 10);
+                (w, h)
+            }
+        } else if bm_width > WIDTH as i32 || bm_rows > HEIGHT as i32 {
+            let scale = (bm_width as f32 / WIDTH as f32).max(bm_rows as f32 / HEIGHT as f32);
+            let tw = ((bm_width as f32 / scale).round() as i32).clamp(1, WIDTH as i32);
+            let th = ((bm_rows as f32 / scale).round() as i32).clamp(1, HEIGHT as i32);
+            (tw, th)
         } else {
-            1.0
+            (bm_width, bm_rows)
         };
 
-        if scale > 1.0 {
-            let target_w = ((bm_width as f32 / scale).round() as i32).clamp(1, WIDTH as i32);
-            let target_h = ((bm_rows as f32 / scale).round() as i32).clamp(1, HEIGHT as i32);
+        if is_icon || bm_width > WIDTH as i32 || bm_rows > HEIGHT as i32 {
             let dst_x0 = (WIDTH as i32 - target_w) / 2;
             let dst_y0 = (HEIGHT as i32 - target_h) / 2;
 
@@ -319,29 +886,14 @@ unsafe fn render_char(face: *mut u8, cp: u32, default_size: c_uint) -> Option<[u
         }
     }
 
-    if (0x2500..=0x257F).contains(&cp) {
-        for y in 0..HEIGHT {
-            if raw[y * WIDTH + 1] > 64 {
-                raw[y * WIDTH + 0] = raw[y * WIDTH + 0].max(raw[y * WIDTH + 1]);
-            }
-            if raw[y * WIDTH + 8] > 64 {
-                raw[y * WIDTH + 9] = raw[y * WIDTH + 9].max(raw[y * WIDTH + 8]);
-            }
-        }
-        for x in 0..WIDTH {
-            if raw[1 * WIDTH + x] > 64 {
-                raw[0 * WIDTH + x] = raw[0 * WIDTH + x].max(raw[1 * WIDTH + x]);
-            }
-            if raw[18 * WIDTH + x] > 64 {
-                raw[19 * WIDTH + x] = raw[19 * WIDTH + x].max(raw[18 * WIDTH + x]);
-            }
-        }
-    }
-
     Some(raw)
 }
 
-unsafe fn render_ligature_slices(face: *mut u8, name: &str, cells: usize) -> Option<Vec<[u8; BPG]>> {
+unsafe fn render_ligature_slices(
+    face: *mut u8,
+    name: &str,
+    cells: usize,
+) -> Option<Vec<[u8; BPG]>> {
     let cname = CString::new(name).ok()?;
     let gid = FT_Get_Name_Index(face, cname.as_ptr());
     if gid == 0 {
@@ -426,7 +978,7 @@ fn main() {
                 mapping.insert(cp, idx);
             }
         }
-        for cp in [0x2500, 0x2501, 0x2502, 0x2503] {
+        for cp in 0x2500..=0x257F {
             if let Some(bitmap) = render_geometric(cp) {
                 let next_idx = unique_glyphs.len() as u32;
                 let idx = *unique_glyphs.entry(bitmap).or_insert_with(|| {
