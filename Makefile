@@ -26,6 +26,9 @@ all: $(BIN)
 $(BIN): $(OBJS)
 	$(LD) -o $@ $^
 
+$(BUILD)/font.o: $(SRC_DIR)/font.asm $(INCS) assets/fonts/nerd_font.bin | $(BUILD)
+	$(ASM) $(ASMFLAGS) -o $@ $<
+
 $(BUILD)/%.o: $(SRC_DIR)/%.asm $(INCS) | $(BUILD)
 	$(ASM) $(ASMFLAGS) -o $@ $<
 
