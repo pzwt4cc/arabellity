@@ -11,13 +11,27 @@ const BPG: usize = WIDTH * HEIGHT;
 const FT_LOAD_RENDER: c_int = 4;
 
 const FONT_PATHS: &[(&str, c_uint)] = &[
-    ("/usr/share/fonts/TTF/JetBrainsMonoNerdFontMono-Medium.ttf", 15),
+    ("/usr/share/fonts/TTF/JetBrainsMonoNerdFont-Medium.ttf", 15),
     ("/usr/share/fonts/TTF/NotoSansMNerdFontMono-Medium.ttf", 15),
     ("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 14),
     ("/usr/share/fonts/IosevkaNerdFont/IosevkaNerdFontMono-Medium.ttf", 16),
     ("/usr/share/fonts/noto/NotoSansMath-Regular.ttf", 14),
     ("/usr/share/fonts/noto/NotoSansSymbols-Medium.ttf", 14),
     ("/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf", 14),
+];
+
+const LIGATURES: &[(&str, usize, u32)] = &[
+    ("equal_equal_equal.liga", 3, 0xEE00),
+    ("exclam_equal_equal.liga", 3, 0xEE03),
+    ("equal_equal.liga", 2, 0xEE10),
+    ("equal_greater.liga", 2, 0xEE12),
+    ("hyphen_greater.liga", 2, 0xEE14),
+    ("exclam_equal.liga", 2, 0xEE16),
+    ("less_equal.liga", 2, 0xEE18),
+    ("greater_equal.liga", 2, 0xEE1A),
+    ("colon_equal.liga", 2, 0xEE1C),
+    ("colon_colon.liga", 2, 0xEE1E),
+    ("less_hyphen.liga", 2, 0xEE20),
 ];
 
 #[link(name = "freetype")]
@@ -35,6 +49,8 @@ extern "C" {
     fn FT_Load_Char(face: *mut u8, char_code: c_ulong, load_flags: c_int) -> c_int;
     fn FT_Get_First_Char(face: *mut u8, agindex: *mut c_uint) -> c_ulong;
     fn FT_Get_Next_Char(face: *mut u8, char_code: c_ulong, agindex: *mut c_uint) -> c_ulong;
+    fn FT_Get_Name_Index(face: *mut u8, glyph_name: *const c_char) -> c_uint;
+    fn FT_Load_Glyph(face: *mut u8, glyph_index: c_uint, load_flags: c_int) -> c_int;
 }
 
 unsafe fn render_char(face: *mut u8, cp: u32) -> Option<[u8; BPG]> {
@@ -82,6 +98,61 @@ unsafe fn render_char(face: *mut u8, cp: u32) -> Option<[u8; BPG]> {
     }
 
     Some(raw)
+}
+
+unsafe fn render_ligature_slices(face: *mut u8, name: &str, cells: usize) -> Option<Vec<[u8; BPG]>> {
+    let cname = CString::new(name).ok()?;
+    let gid = FT_Get_Name_Index(face, cname.as_ptr());
+    if gid == 0 {
+        return None;
+    }
+    if FT_Load_Glyph(face, gid, FT_LOAD_RENDER) != 0 {
+        return None;
+    }
+    let size_ptr = *(face.add(160) as *const *const u8);
+    let ascender_26_6 = *(size_ptr.add(48) as *const c_long);
+    let ascender = ((ascender_26_6 + 32) >> 6) as i32;
+
+    let glyph_ptr = *(face.add(152) as *const *const u8);
+    let bm_rows = *(glyph_ptr.add(152) as *const c_uint) as i32;
+    let bm_width = *(glyph_ptr.add(156) as *const c_uint) as i32;
+    let bm_pitch = *(glyph_ptr.add(160) as *const c_int);
+    let bm_buf = *(glyph_ptr.add(168) as *const *const u8);
+    let bm_left = *(glyph_ptr.add(192) as *const c_int);
+    let bm_top = *(glyph_ptr.add(196) as *const c_int);
+
+    let full_w = cells * WIDTH;
+    let mut full = vec![0u8; full_w * HEIGHT];
+    if !bm_buf.is_null() && bm_rows > 0 && bm_width > 0 {
+        let base_x = (cells - 1) as i32 * WIDTH as i32 + bm_left;
+        let base_y = ascender - bm_top;
+        for row in 0..bm_rows {
+            let dst_y = base_y + row;
+            if dst_y < 0 || dst_y >= HEIGHT as i32 {
+                continue;
+            }
+            for col in 0..bm_width {
+                let dst_x = base_x + col;
+                if dst_x < 0 || dst_x >= full_w as i32 {
+                    continue;
+                }
+                let val = *bm_buf.offset((row * bm_pitch + col) as isize);
+                full[dst_y as usize * full_w + dst_x as usize] = val;
+            }
+        }
+    }
+
+    let mut slices = Vec::with_capacity(cells);
+    for cell_idx in 0..cells {
+        let mut slice = [0u8; BPG];
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                slice[y * WIDTH + x] = full[y * full_w + (cell_idx * WIDTH + x)];
+            }
+        }
+        slices.push(slice);
+    }
+    Some(slices)
 }
 
 fn main() {
@@ -143,6 +214,26 @@ fn main() {
 
         mapping.insert(32, 0);
         mapping.insert(63, 1);
+
+        let jb_face = faces[0];
+        for &(lig_name, cells, base_cp) in LIGATURES {
+            if let Some(slices) = render_ligature_slices(jb_face, lig_name, cells) {
+                for (i, slice) in slices.into_iter().enumerate() {
+                    let cp = base_cp + i as u32;
+                    let idx = if let Some(&existing) = unique_glyphs.get(&slice) {
+                        existing
+                    } else {
+                        let next_idx = unique_glyphs.len() as u32;
+                        unique_glyphs.insert(slice, next_idx);
+                        glyph_data.extend_from_slice(&slice);
+                        next_idx
+                    };
+                    mapping.insert(cp, idx);
+                }
+            } else {
+                eprintln!("Warning: could not render ligature {}", lig_name);
+            }
+        }
 
         let glyph_count = unique_glyphs.len() as u32;
         let map_count = mapping.len() as u32;

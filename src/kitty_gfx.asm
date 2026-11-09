@@ -18,6 +18,7 @@ extern term_rows
 extern term_scroll_up
 extern png_decode
 extern term_find_placeholder_bounds
+extern in_alt_screen
 
 %define MAX_PLACEMENTS 64
 %define PLACE_SIZE 48
@@ -155,6 +156,8 @@ kitty_gfx_clear:
     ret
 
 kitty_gfx_scroll_up:
+    cmp     byte [in_alt_screen], 0
+    jnz     .done_early
     push    rbx
     push    r12
     push    r13
@@ -197,6 +200,7 @@ kitty_gfx_scroll_up:
     pop     r13
     pop     r12
     pop     rbx
+.done_early:
     ret
 
 kitty_gfx_apc_begin:
@@ -1593,6 +1597,9 @@ draw_current_image:
     ret
 
 kitty_gfx_render:
+    cmp     byte [in_alt_screen], 0
+    jnz     .r_alt_skip
+
     push    rbx
     push    r12
     push    r13
@@ -1717,4 +1724,5 @@ kitty_gfx_render:
     pop     r13
     pop     r12
     pop     rbx
+.r_alt_skip:
     ret

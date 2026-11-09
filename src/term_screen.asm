@@ -31,6 +31,7 @@ global font_h
 global url_hover_active
 global term_scroll_up
 global term_find_placeholder_bounds
+global in_alt_screen
 
 extern font_glyph_data
 extern font_glyph_for_char
@@ -1108,8 +1109,11 @@ term_scroll_up:
     dec     ecx
     jnz     .clear_last
 
+    cmp     byte [in_alt_screen], 0
+    jne     .skip_gfx_scroll
     mov     edi, 1
     call    kitty_gfx_scroll_up
+.skip_gfx_scroll:
     pop     rdi
     pop     rsi
     pop     rbx
@@ -2524,6 +2528,7 @@ color_from_256:
     mov     r10d, eax
     mov     r11d, edx
 
+    mov     eax, r9d
     call    cube_comp
     shl     eax, 8
     push    rax
@@ -2934,6 +2939,8 @@ term_render:
     cmp     edi, 0x10EEEE
     je      .space_cell
 
+    call    resolve_cell_ligature
+
     or      r8d, 0xff000000
     cmp     r9d, [cfg_bg]
     jne     .non_def_bg
@@ -3177,6 +3184,247 @@ draw_glyph:
     pop     r14
     pop     r13
     pop     r12
+    pop     rbx
+    ret
+
+resolve_cell_ligature:
+    push    rbx
+    push    r8
+    push    r9
+
+    cmp     edi, '='
+    je      .check_equal
+    cmp     edi, '>'
+    je      .check_greater
+    cmp     edi, '-'
+    je      .check_hyphen
+    cmp     edi, '!'
+    je      .check_exclam
+    cmp     edi, '<'
+    je      .check_less
+    cmp     edi, ':'
+    je      .check_colon
+    jmp     .lig_ret
+
+.check_equal:
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .eq_no_n1
+    mov     eax, [rbx + 16]
+    cmp     eax, '='
+    jne     .eq_check_arrow
+    mov     eax, ebp
+    add     eax, 2
+    cmp     eax, [cur_row_cols]
+    jae     .eq_check_2
+    mov     eax, [rbx + 32]
+    cmp     eax, '='
+    jne     .eq_check_2
+    test    ebp, ebp
+    jz      .eq3_0
+    cmp     dword [rbx - 16], '='
+    je      .lig_ret
+.eq3_0:
+    mov     edi, 0xEE00
+    jmp     .lig_ret
+
+.eq_check_arrow:
+    cmp     eax, '>'
+    jne     .eq_no_n1
+    mov     edi, 0xEE12
+    jmp     .lig_ret
+
+.eq_check_2:
+    test    ebp, ebp
+    jz      .eq2_0
+    cmp     dword [rbx - 16], '='
+    je      .check_eq_prev
+.eq2_0:
+    mov     edi, 0xEE10
+    jmp     .lig_ret
+
+.eq_no_n1:
+.check_eq_prev:
+    test    ebp, ebp
+    jz      .lig_ret
+    mov     eax, [rbx - 16]
+    cmp     eax, '='
+    jne     .eq_prev_not_eq
+    cmp     ebp, 1
+    jle     .eq_prev_no_p2
+    mov     edx, [rbx - 32]
+    cmp     edx, '='
+    jne     .eq_prev_p2_not_eq
+    mov     edi, 0xEE02
+    jmp     .lig_ret
+.eq_prev_p2_not_eq:
+    cmp     edx, '!'
+    jne     .eq_p2_not_exclam
+    mov     edi, 0xEE05
+    jmp     .lig_ret
+.eq_p2_not_exclam:
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .eq2_1
+    cmp     dword [rbx + 16], '='
+    je      .eq3_1
+.eq2_1:
+    mov     edi, 0xEE11
+    jmp     .lig_ret
+.eq3_1:
+    mov     edi, 0xEE01
+    jmp     .lig_ret
+
+.eq_prev_no_p2:
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .eq2_1
+    cmp     dword [rbx + 16], '='
+    je      .eq3_1
+    mov     edi, 0xEE11
+    jmp     .lig_ret
+
+.eq_prev_not_eq:
+    cmp     eax, '!'
+    jne     .eq_p1_not_exclam
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .excl_eq_1
+    cmp     dword [rbx + 16], '='
+    je      .excl_eq_eq_1
+.excl_eq_1:
+    mov     edi, 0xEE17
+    jmp     .lig_ret
+.excl_eq_eq_1:
+    mov     edi, 0xEE04
+    jmp     .lig_ret
+.eq_p1_not_exclam:
+    cmp     eax, '<'
+    jne     .eq_p1_not_less
+    mov     edi, 0xEE19
+    jmp     .lig_ret
+.eq_p1_not_less:
+    cmp     eax, '>'
+    jne     .eq_p1_not_greater
+    mov     edi, 0xEE1B
+    jmp     .lig_ret
+.eq_p1_not_greater:
+    cmp     eax, ':'
+    jne     .lig_ret
+    mov     edi, 0xEE1D
+    jmp     .lig_ret
+
+.check_greater:
+    test    ebp, ebp
+    jz      .gt_check_n1
+    mov     eax, [rbx - 16]
+    cmp     eax, '='
+    jne     .gt_check_hyphen
+    mov     edi, 0xEE13
+    jmp     .lig_ret
+.gt_check_hyphen:
+    cmp     eax, '-'
+    jne     .gt_check_n1
+    mov     edi, 0xEE15
+    jmp     .lig_ret
+.gt_check_n1:
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .lig_ret
+    cmp     dword [rbx + 16], '='
+    jne     .lig_ret
+    mov     edi, 0xEE1A
+    jmp     .lig_ret
+
+.check_hyphen:
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .hy_check_prev
+    cmp     dword [rbx + 16], '>'
+    jne     .hy_check_prev
+    mov     edi, 0xEE14
+    jmp     .lig_ret
+.hy_check_prev:
+    test    ebp, ebp
+    jz      .lig_ret
+    cmp     dword [rbx - 16], '<'
+    jne     .lig_ret
+    mov     edi, 0xEE21
+    jmp     .lig_ret
+
+.check_exclam:
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .lig_ret
+    cmp     dword [rbx + 16], '='
+    jne     .lig_ret
+    mov     eax, ebp
+    add     eax, 2
+    cmp     eax, [cur_row_cols]
+    jae     .excl_eq_0
+    cmp     dword [rbx + 32], '='
+    je      .excl_eq_eq_0
+.excl_eq_0:
+    mov     edi, 0xEE16
+    jmp     .lig_ret
+.excl_eq_eq_0:
+    mov     edi, 0xEE03
+    jmp     .lig_ret
+
+.check_less:
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .lig_ret
+    mov     eax, [rbx + 16]
+    cmp     eax, '='
+    jne     .less_check_hy
+    mov     edi, 0xEE18
+    jmp     .lig_ret
+.less_check_hy:
+    cmp     eax, '-'
+    jne     .lig_ret
+    mov     edi, 0xEE20
+    jmp     .lig_ret
+
+.check_colon:
+    mov     eax, ebp
+    inc     eax
+    cmp     eax, [cur_row_cols]
+    jae     .col_check_prev
+    mov     eax, [rbx + 16]
+    cmp     eax, '='
+    jne     .col_check_col
+    mov     edi, 0xEE1C
+    jmp     .lig_ret
+.col_check_col:
+    cmp     eax, ':'
+    jne     .col_check_prev
+    test    ebp, ebp
+    jz      .col2_0
+    cmp     dword [rbx - 16], ':'
+    je      .lig_ret
+.col2_0:
+    mov     edi, 0xEE1E
+    jmp     .lig_ret
+.col_check_prev:
+    test    ebp, ebp
+    jz      .lig_ret
+    cmp     dword [rbx - 16], ':'
+    jne     .lig_ret
+    mov     edi, 0xEE1F
+    jmp     .lig_ret
+
+.lig_ret:
+    pop     r9
+    pop     r8
     pop     rbx
     ret
 
